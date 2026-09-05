@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="AgoraXchangeExperimental.AppHost/AgoraXchangeExperimental.AppHost.csproj" />
+  <Project Path="AgoraXchangeExperimental.Server/AgoraXchangeExperimental.Server.csproj" />
+</Solution>

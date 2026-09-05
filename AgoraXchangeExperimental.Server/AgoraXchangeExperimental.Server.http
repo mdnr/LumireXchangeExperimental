@@ -1,0 +1,33 @@
+@Server_HostAddress = http://localhost:5582
+
+### List products
+GET {{Server_HostAddress}}/api/products/
+Accept: application/json
+
+### Get product
+GET {{Server_HostAddress}}/api/products/aurora-headphones/
+Accept: application/json
+
+### Login as demo seller
+POST {{Server_HostAddress}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "seller@lumiere.app",
+  "password": "Seller123!"
+}
+
+### Create product (Sellers only) — set token from login response
+POST {{Server_HostAddress}}/api/products
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "name": "My First Product",
+  "tagline": "A test product",
+  "description": "Created via the API.",
+  "price": 99,
+  "category": "Audio",
+  "colors": ["#1a1a1a"],
+  "imageUrls": ["https://images.unsplash.com/photo-1505740420928-5e560c06d30e?auto=format&fit=crop&w=1200&q=80"]
+}
