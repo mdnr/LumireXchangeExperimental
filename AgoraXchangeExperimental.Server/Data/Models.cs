@@ -24,6 +24,9 @@ public class Product
     public List<string> Colors { get; set; } = [];
     public string SpecsJson { get; set; } = "[]";
     public string FeaturesJson { get; set; } = "[]";
+    public string VariantsJson { get; set; } = "[]";
+    public string ModelMaterialsJson { get; set; } = "[]";
+    public string ColorPresetsJson { get; set; } = "[]";
     public string? ModelUrl { get; set; }
     public string? ModelPosterUrl { get; set; }
     public MaterialSettings Material { get; set; } = new();
@@ -40,4 +43,30 @@ public class MaterialSettings
     public double Metalness { get; set; } = 0.2;
     public double Roughness { get; set; } = 0.55;
     public double Clearcoat { get; set; } = 0;
+}
+
+public class ColorVariant
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string Hex { get; set; } = "#e8e8e8";
+    public string? ImageUrl { get; set; }
+    public int? PhotoIndex { get; set; }
+    public int? MaterialIndex { get; set; }
+    public MaterialSettings? Material { get; set; }
+    public List<ModelMaterial>? ModelMaterials { get; set; }
+}
+
+public class ModelMaterial
+{
+    public int Index { get; set; }
+    public string Label { get; set; } = string.Empty;
+    public MaterialSettings Settings { get; set; } = new();
+}
+
+public class ColorPreset
+{
+    public string Name { get; set; } = string.Empty;
+    public MaterialSettings Material { get; set; } = new();
+    public List<ModelMaterial> Materials { get; set; } = [];
 }

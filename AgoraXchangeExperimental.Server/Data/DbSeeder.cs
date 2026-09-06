@@ -96,6 +96,274 @@ public static class DbSeeder
             db.Products.AddRange(products);
             await db.SaveChangesAsync();
         }
+
+        await BackfillVariantsAsync(db, services);
+        await EnsureColorPresetsAsync(db);
+        await BackfillVariantLooksAsync(db);
+    }
+
+    private static async Task BackfillVariantsAsync(AppDbContext db, IServiceProvider services)
+    {
+        var env = services.GetRequiredService<IWebHostEnvironment>();
+        var products = await db.Products.Where(p => string.IsNullOrEmpty(p.VariantsJson) || p.VariantsJson == "[]").ToListAsync();
+        foreach (var product in products)
+        {
+            if (product.Colors.Count == 0)
+            {
+                continue;
+            }
+
+            var variants = product.Colors.Select((hex, i) => new ColorVariant
+            {
+                Id = i + 1,
+                Name = SuggestColorName(hex, i),
+                Hex = hex,
+                ImageUrl = product.ImageUrls.ElementAtOrDefault(i) ?? product.ImageUrls.FirstOrDefault(),
+                PhotoIndex = product.ImageUrls.Count > 0 ? Math.Min(i, product.ImageUrls.Count - 1) : null,
+                MaterialIndex = null
+            }).ToList();
+
+            var glbPath = Path.Combine(env.ContentRootPath, "wwwroot", "models", $"{product.Slug}.glb");
+            var extracted = ModelFileReader.ExtractMaterials(glbPath);
+            var materials = extracted.Select((e, i) =>
+            {
+                var label = string.IsNullOrWhiteSpace(e.Name) ? $"Material {i + 1}" : e.Name;
+                var match = variants.FirstOrDefault(v =>
+                    v.Name.Equals(label, StringComparison.OrdinalIgnoreCase))?.Hex;
+                return new ModelMaterial
+                {
+                    Index = e.Index,
+                    Label = label,
+                    Settings = new MaterialSettings
+                    {
+                        SurfaceType = "color",
+                        Color = match ?? product.Colors[Math.Min(i, product.Colors.Count - 1)],
+                        Finish = "matte",
+                        Metalness = 0.3,
+                        Roughness = 0.45,
+                        Clearcoat = 0.15
+                    }
+                };
+            }).ToList();
+
+            for (var i = 0; i < variants.Count; i++)
+            {
+                variants[i].MaterialIndex = materials.Count > i ? i : null;
+            }
+            product.ModelMaterialsJson = JsonSerializer.Serialize(materials, Json.Options);
+            product.VariantsJson = JsonSerializer.Serialize(variants, Json.Options);
+        }
+        if (products.Count > 0)
+        {
+            await db.SaveChangesAsync();
+        }
+    }
+
+    private static async Task EnsureColorPresetsAsync(AppDbContext db)
+    {
+        var products = await db.Products.ToListAsync();
+        var changed = false;
+        foreach (var product in products)
+        {
+            var materials = Json.JsonList<ModelMaterial>(product.ModelMaterialsJson);
+            var presets = Json.JsonList<ColorPreset>(product.ColorPresetsJson);
+            var names = new HashSet<string>(presets.Select(p => p.Name), StringComparer.OrdinalIgnoreCase);
+
+            var toAdd = new List<ColorPreset>();
+            if (!names.Contains("Classic"))
+            {
+                toAdd.Add(new ColorPreset
+                {
+                    Name = "Classic",
+                    Material = CloneMaterial(product.Material),
+                    Materials = materials.Select(CloneModelMaterial).ToList()
+                });
+            }
+            if (!names.Contains("Noir"))
+            {
+                toAdd.Add(new ColorPreset
+                {
+                    Name = "Noir",
+                    Material = new MaterialSettings { SurfaceType = "color", Color = "#0d0d10", Finish = "chrome", Metalness = 0.9, Roughness = 0.1, Clearcoat = 0.6 },
+                    Materials = materials.Select(m => new ModelMaterial
+                    {
+                        Index = m.Index,
+                        Label = m.Label,
+                        Settings = new MaterialSettings { SurfaceType = "color", Color = "#0d0d10", Finish = "chrome", Metalness = 0.9, Roughness = 0.1, Clearcoat = 0.6, TextureUrl = m.Settings.TextureUrl }
+                    }).ToList()
+                });
+            }
+            if (!names.Contains("Glacier"))
+            {
+                toAdd.Add(new ColorPreset
+                {
+                    Name = "Glacier",
+                    Material = new MaterialSettings { SurfaceType = "color", Color = "#eef1f5", Finish = "matte", Metalness = 0.05, Roughness = 0.7, Clearcoat = 0.1 },
+                    Materials = materials.Select(m => new ModelMaterial
+                    {
+                        Index = m.Index,
+                        Label = m.Label,
+                        Settings = new MaterialSettings { SurfaceType = "color", Color = "#eef1f5", Finish = "matte", Metalness = 0.05, Roughness = 0.7, Clearcoat = 0.1, TextureUrl = m.Settings.TextureUrl }
+                    }).ToList()
+                });
+            }
+
+            if (toAdd.Count > 0)
+            {
+                presets.AddRange(toAdd);
+                product.ColorPresetsJson = JsonSerializer.Serialize(presets, Json.Options);
+                changed = true;
+            }
+        }
+
+        if (changed)
+        {
+            await db.SaveChangesAsync();
+        }
+    }
+
+    private static readonly string[] DefaultTones = { "#e8e8e8", "#e5e5e5", "#f2f2f2", "#f5f5f5", "#ffffff", "#eeeeee", "#e0e0e0", "#d4d4d4", "#c9c9c9" };
+
+    private static bool IsDefaultTone(string hex) =>
+        DefaultTones.Contains(hex.Trim().ToLowerInvariant(), StringComparer.OrdinalIgnoreCase);
+
+    private static async Task BackfillVariantLooksAsync(AppDbContext db)
+    {
+        var products = await db.Products.ToListAsync();
+        var changed = false;
+        foreach (var product in products)
+        {
+            var parts = Json.JsonList<ModelMaterial>(product.ModelMaterialsJson);
+            var variants = Json.JsonList<ColorVariant>(product.VariantsJson);
+            var colors = product.Colors;
+
+            if (variants.Count == 0 && colors.Count == 0 && parts.Count > 0)
+            {
+                colors = parts
+                    .Select(m => m.Settings.Color.Trim())
+                    .Where(c => !string.IsNullOrWhiteSpace(c) && !IsDefaultTone(c))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Take(4)
+                    .ToList();
+            }
+
+            if (variants.Count == 0 && colors.Count > 0)
+            {
+                variants = colors.Select((hex, i) => new ColorVariant
+                {
+                    Id = i + 1,
+                    Name = SuggestColorName(hex, i),
+                    Hex = hex,
+                    ImageUrl = product.ImageUrls.ElementAtOrDefault(i) ?? product.ImageUrls.FirstOrDefault(),
+                    PhotoIndex = product.ImageUrls.Count > 0 ? Math.Min(i, product.ImageUrls.Count - 1) : null,
+                    MaterialIndex = null
+                }).ToList();
+                product.Colors = colors;
+            }
+
+            if (variants.Count == 0 || variants.All(v => v.Material is not null))
+            {
+                var repaired = false;
+                foreach (var variant in variants)
+                {
+                    if (variant.PhotoIndex is null && !string.IsNullOrEmpty(variant.ImageUrl))
+                    {
+                        var idx = product.ImageUrls.IndexOf(variant.ImageUrl);
+                        if (idx >= 0)
+                        {
+                            variant.PhotoIndex = idx;
+                            repaired = true;
+                        }
+                    }
+
+                    var suggestion = SuggestColorName(variant.Hex, variant.Id - 1);
+                    if (variant.Name == $"Colour {variant.Id}" && suggestion != variant.Name)
+                    {
+                        variant.Name = suggestion;
+                        repaired = true;
+                    }
+                }
+                if (repaired)
+                {
+                    product.VariantsJson = JsonSerializer.Serialize(variants, Json.Options);
+                    changed = true;
+                }
+                continue;
+            }
+            foreach (var variant in variants)
+            {
+                if (variant.Material is not null)
+                {
+                    continue;
+                }
+
+                variant.Material = new MaterialSettings
+                {
+                    SurfaceType = "color",
+                    Color = variant.Hex,
+                    Finish = "matte",
+                    Metalness = 0.3,
+                    Roughness = 0.45,
+                    Clearcoat = 0.15
+                };
+                variant.ModelMaterials = parts.Select(m => new ModelMaterial
+                {
+                    Index = m.Index,
+                    Label = m.Label,
+                    Settings = new MaterialSettings
+                    {
+                        SurfaceType = "color",
+                        Color = variant.Hex,
+                        Finish = m.Settings.Finish,
+                        Metalness = m.Settings.Metalness,
+                        Roughness = m.Settings.Roughness,
+                        Clearcoat = m.Settings.Clearcoat,
+                        TextureUrl = m.Settings.TextureUrl
+                    }
+                }).ToList();
+            }
+
+            product.VariantsJson = JsonSerializer.Serialize(variants, Json.Options);
+            changed = true;
+        }
+
+        if (changed)
+        {
+            await db.SaveChangesAsync();
+        }
+    }
+
+    private static MaterialSettings CloneMaterial(MaterialSettings s) => new()
+    {
+        SurfaceType = s.SurfaceType,
+        Color = s.Color,
+        TextureUrl = s.TextureUrl,
+        Finish = s.Finish,
+        Metalness = s.Metalness,
+        Roughness = s.Roughness,
+        Clearcoat = s.Clearcoat
+    };
+
+    private static ModelMaterial CloneModelMaterial(ModelMaterial m) => new()
+    {
+        Index = m.Index,
+        Label = m.Label,
+        Settings = CloneMaterial(m.Settings)
+    };
+
+    private static string SuggestColorName(string hex, int index)
+    {
+        var key = hex.ToLowerInvariant();
+        return key switch
+        {
+            "#1a1a1a" or "#000000" or "#101010" or "#2b2b2b" or "#2a2a2a" => "Onyx",
+            "#0d0d10" or "#0d0d0d" or "#0f0f0f" => "Noir",
+            "#d4d4d4" or "#e5e5e5" or "#e8e8e8" or "#ffffff" => "Pearl",
+            "#8b5e3c" or "#7a4f2b" => "Walnut",
+            "#c9a227" or "#d4af37" => "Gold",
+            "#bcd0d8" or "#a7c4cf" => "Mist",
+            _ => $"Colour {index + 1}",
+        };
     }
 
     private static async Task<AppUser?> EnsureUser(UserManager<AppUser> userManager, string email, string password, string displayName, string role)

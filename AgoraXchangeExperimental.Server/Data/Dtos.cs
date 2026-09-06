@@ -5,6 +5,23 @@ using System.Text.Json;
 public static class Json
 {
     public static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web);
+
+    public static List<T> JsonList<T>(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return [];
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<List<T>>(json, Options) ?? [];
+        }
+        catch
+        {
+            return [];
+        }
+    }
 }
 
 public record AuthResponse(string Token, string Email, string DisplayName, string[] Roles);
@@ -45,6 +62,88 @@ public class FeatureDto
 {
     public string Title { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
+}
+
+public class ColorVariantDto
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string Hex { get; set; } = "#e8e8e8";
+    public string? ImageUrl { get; set; }
+    public int? PhotoIndex { get; set; }
+    public int? MaterialIndex { get; set; }
+    public MaterialDto? Material { get; set; }
+    public List<ModelMaterialDto>? ModelMaterials { get; set; }
+
+    public static ColorVariantDto From(ColorVariant v) => new()
+    {
+        Id = v.Id,
+        Name = v.Name,
+        Hex = v.Hex,
+        ImageUrl = v.ImageUrl,
+        PhotoIndex = v.PhotoIndex,
+        MaterialIndex = v.MaterialIndex,
+        Material = v.Material is null ? null : MaterialDto.From(v.Material),
+        ModelMaterials = v.ModelMaterials?.Select(ModelMaterialDto.From).ToList()
+    };
+
+    public ColorVariant ToModel() => new()
+    {
+        Id = Id,
+        Name = Name,
+        Hex = Hex,
+        ImageUrl = ImageUrl,
+        PhotoIndex = PhotoIndex,
+        MaterialIndex = MaterialIndex,
+        Material = Material is null ? null : ToMaterial(Material),
+        ModelMaterials = ModelMaterials?.Select(ToModelMaterial).ToList()
+    };
+
+    private static MaterialSettings ToMaterial(MaterialDto m) => new()
+    {
+        SurfaceType = m.SurfaceType,
+        Color = m.Color,
+        TextureUrl = m.TextureUrl,
+        Finish = m.Finish,
+        Metalness = Math.Clamp(m.Metalness, 0, 1),
+        Roughness = Math.Clamp(m.Roughness, 0, 1),
+        Clearcoat = Math.Clamp(m.Clearcoat, 0, 1)
+    };
+
+    private static ModelMaterial ToModelMaterial(ModelMaterialDto m) => new()
+    {
+        Index = m.Index,
+        Label = m.Label,
+        Settings = m.Material is null ? new MaterialSettings() : ToMaterial(m.Material)
+    };
+}
+
+public class ModelMaterialDto
+{
+    public int Index { get; set; }
+    public string Label { get; set; } = string.Empty;
+    public MaterialDto Material { get; set; } = new();
+
+    public static ModelMaterialDto From(ModelMaterial m) => new()
+    {
+        Index = m.Index,
+        Label = m.Label,
+        Material = MaterialDto.From(m.Settings)
+    };
+}
+
+public class ColorPresetDto
+{
+    public string Name { get; set; } = string.Empty;
+    public MaterialDto Material { get; set; } = new();
+    public List<ModelMaterialDto> ModelMaterials { get; set; } = [];
+
+    public static ColorPresetDto From(ColorPreset p) => new()
+    {
+        Name = p.Name,
+        Material = MaterialDto.From(p.Material),
+        ModelMaterials = p.Materials.Select(ModelMaterialDto.From).ToList()
+    };
 }
 
 public class SellerDto
@@ -90,6 +189,9 @@ public class ProductDto : ProductSummaryDto
     public List<FeatureDto> Features { get; set; } = [];
     public string? ModelPosterUrl { get; set; }
     public MaterialDto Material { get; set; } = new();
+    public List<ColorVariantDto> Variants { get; set; } = [];
+    public List<ModelMaterialDto> ModelMaterials { get; set; } = [];
+    public List<ColorPresetDto> ColorPresets { get; set; } = [];
     public SellerDto Seller { get; set; } = new();
     public DateTime UpdatedAt { get; set; }
 
@@ -109,6 +211,9 @@ public class ProductDto : ProductSummaryDto
         Specs = JsonSerializer.Deserialize<List<SpecDto>>(p.SpecsJson, Json.Options) ?? [],
         Features = JsonSerializer.Deserialize<List<FeatureDto>>(p.FeaturesJson, Json.Options) ?? [],
         Material = MaterialDto.From(p.Material),
+        Variants = Json.JsonList<ColorVariant>(p.VariantsJson).Select(ColorVariantDto.From).ToList(),
+        ModelMaterials = Json.JsonList<ModelMaterial>(p.ModelMaterialsJson).Select(ModelMaterialDto.From).ToList(),
+        ColorPresets = Json.JsonList<ColorPreset>(p.ColorPresetsJson).Select(ColorPresetDto.From).ToList(),
         Seller = new SellerDto
         {
             Id = p.Seller?.Id ?? p.SellerId,
@@ -135,6 +240,9 @@ public class ProductInputDto
     public string? ModelUrl { get; set; }
     public string? ModelPosterUrl { get; set; }
     public MaterialDto? Material { get; set; }
+    public List<ColorVariantDto> Variants { get; set; } = [];
+    public List<ModelMaterialDto> ModelMaterials { get; set; } = [];
+    public List<ColorPresetDto> ColorPresets { get; set; } = [];
 }
 
 public static class Slugger

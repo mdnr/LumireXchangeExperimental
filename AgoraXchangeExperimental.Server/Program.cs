@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.StaticFiles;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
@@ -211,6 +212,7 @@ productsApi.MapGet("/{slug}", async (AppDbContext db, string slug) =>
 
     var related = await db.Products.AsNoTracking()
         .Where(p => p.Category == product.Category && p.Slug != product.Slug)
+        .OrderBy(p => p.CreatedAt)
         .Take(4)
         .Select(p => ProductSummaryDto.From(p))
         .ToListAsync();
@@ -271,6 +273,9 @@ productsApi.MapPost("/", async (ProductInputDto input, ClaimsPrincipal principal
         Colors = input.Colors,
         SpecsJson = JsonSerializer.Serialize(input.Specs, Json.Options),
         FeaturesJson = JsonSerializer.Serialize(input.Features, Json.Options),
+        VariantsJson = JsonSerializer.Serialize(input.Variants.Select(v => v.ToModel()).ToList(), Json.Options),
+        ModelMaterialsJson = JsonSerializer.Serialize(input.ModelMaterials.Select(ToModel).ToList(), Json.Options),
+        ColorPresetsJson = JsonSerializer.Serialize(input.ColorPresets.Select(ToPreset).ToList(), Json.Options),
         ModelUrl = input.ModelUrl,
         ModelPosterUrl = input.ModelPosterUrl,
         SellerId = seller.Id
@@ -324,6 +329,9 @@ productsApi.MapPut("/{slug}", async (string slug, ProductInputDto input, ClaimsP
     product.Colors = input.Colors;
     product.SpecsJson = JsonSerializer.Serialize(input.Specs, Json.Options);
     product.FeaturesJson = JsonSerializer.Serialize(input.Features, Json.Options);
+    product.VariantsJson = JsonSerializer.Serialize(input.Variants.Select(v => v.ToModel()).ToList(), Json.Options);
+    product.ModelMaterialsJson = JsonSerializer.Serialize(input.ModelMaterials.Select(ToModel).ToList(), Json.Options);
+    product.ColorPresetsJson = JsonSerializer.Serialize(input.ColorPresets.Select(ToPreset).ToList(), Json.Options);
     product.ModelUrl = input.ModelUrl;
     product.ModelPosterUrl = input.ModelPosterUrl;
     if (input.Material is not null)
@@ -365,6 +373,15 @@ productsApi.MapDelete("/{slug}", async (string slug, ClaimsPrincipal principal, 
         if (File.Exists(filePath))
         {
             File.Delete(filePath);
+        }
+    }
+
+    foreach (var imageUrl in product.ImageUrls.Where(u => u.StartsWith("/images/")))
+    {
+        var imagePath = Path.Combine(env.ContentRootPath, "wwwroot", imageUrl.TrimStart('/'));
+        if (File.Exists(imagePath))
+        {
+            File.Delete(imagePath);
         }
     }
 
@@ -418,17 +435,109 @@ productsApi.MapPost("/{slug}/model", async (string slug, IFormFile? file, Claims
     }
 
     product.ModelUrl = $"/models/{fileName}";
+
+    var existingMaterials = Json.JsonList<ModelMaterial>(product.ModelMaterialsJson);
+    var variants = Json.JsonList<ColorVariant>(product.VariantsJson);
+    var extracted = ModelFileReader.ExtractMaterials(savePath);
+    var palette = variants
+        .Where(v => v.MaterialIndex is int idx && extracted.Any(e => e.Index == idx))
+        .ToDictionary(v => v.MaterialIndex!.Value, v => v.Hex);
+    product.ModelMaterialsJson = JsonSerializer.Serialize(extracted.Select(e => new ModelMaterial
+    {
+        Index = e.Index,
+        Label = string.IsNullOrWhiteSpace(e.Name) ? $"Material {e.Index + 1}" : e.Name,
+        Settings = existingMaterials.FirstOrDefault(m => m.Index == e.Index)?.Settings
+            ?? new MaterialSettings { Color = palette.TryGetValue(e.Index, out var hex) ? hex : "#e8e8e8" }
+    }).ToList(), Json.Options);
+
+    foreach (var variant in variants)
+    {
+        if (variant.MaterialIndex is int idx && !extracted.Any(e => e.Index == idx))
+        {
+            variant.MaterialIndex = null;
+        }
+    }
+    product.VariantsJson = JsonSerializer.Serialize(variants, Json.Options);
+
     product.UpdatedAt = DateTime.UtcNow;
     await db.SaveChangesAsync();
 
-    return Results.Ok(new { modelUrl = product.ModelUrl });
+    var materials = Json.JsonList<ModelMaterial>(product.ModelMaterialsJson);
+    return Results.Ok(new
+    {
+        modelUrl = product.ModelUrl,
+        materials = materials.Select(ModelMaterialDto.From).ToList()
+    });
 })
 .RequireAuthorization(policy => policy.RequireRole("Seller"))
+.DisableAntiforgery()
 .WithName("UploadModel");
+
+productsApi.MapPost("/{slug}/images", async (string slug, IFormFileCollection files, ClaimsPrincipal principal, UserManager<AppUser> userManager, AppDbContext db, IWebHostEnvironment env) =>
+{
+    var seller = await userManager.GetUserAsync(principal);
+    if (seller is null)
+    {
+        return Results.Unauthorized();
+    }
+
+    var product = await db.Products.FirstOrDefaultAsync(p => p.Slug == slug);
+    if (product is null)
+    {
+        return Results.NotFound();
+    }
+
+    if (product.SellerId != seller.Id)
+    {
+        return Results.Forbid();
+    }
+
+    var allowedExtensions = new[] { ".jpg", ".jpeg", ".png", ".webp", ".gif" };
+    var imagesDir = Path.Combine(env.ContentRootPath, "wwwroot", "images");
+    Directory.CreateDirectory(imagesDir);
+
+    var saved = new List<string>();
+    foreach (var file in files.Where(f => f is not null && f.Length > 0))
+    {
+        var extension = Path.GetExtension(file.FileName).ToLowerInvariant();
+        if (!allowedExtensions.Contains(extension))
+        {
+            continue;
+        }
+
+        var fileName = $"{slug}-{Guid.NewGuid().ToString("N")[..8]}{extension}";
+        var savePath = Path.Combine(imagesDir, fileName);
+        await using (var stream = new FileStream(savePath, FileMode.Create))
+        {
+            await file.CopyToAsync(stream);
+        }
+        saved.Add($"/images/{fileName}");
+    }
+
+    product.ImageUrls = product.ImageUrls.Concat(saved).ToList();
+    product.UpdatedAt = DateTime.UtcNow;
+    await db.SaveChangesAsync();
+
+    return Results.Ok(new { imageUrls = product.ImageUrls });
+})
+.RequireAuthorization(policy => policy.RequireRole("Seller"))
+.DisableAntiforgery()
+.WithName("UploadImages");
 
 app.MapDefaultEndpoints();
 
-app.UseFileServer();
+// Serve static assets (frontend build + uploaded models). GLB/glTF aren't in the
+// default content-type map, so register them explicitly.
+var staticContentTypes = new FileExtensionContentTypeProvider();
+staticContentTypes.Mappings[".glb"] = "model/gltf-binary";
+staticContentTypes.Mappings[".gltf"] = "model/gltf+json";
+
+app.UseDefaultFiles();
+app.UseStaticFiles(new StaticFileOptions
+{
+    ContentTypeProvider = staticContentTypes,
+    ServeUnknownFileTypes = true
+});
 
 app.Run();
 
@@ -447,3 +556,17 @@ static MaterialSettings MapMaterial(MaterialDto m)
         Clearcoat = Math.Clamp(m.Clearcoat, 0, 1)
     };
 }
+
+static ModelMaterial ToModel(ModelMaterialDto m) => new()
+{
+    Index = m.Index,
+    Label = m.Label,
+    Settings = m.Material is null ? new MaterialSettings() : MapMaterial(m.Material),
+};
+
+static ColorPreset ToPreset(ColorPresetDto p) => new()
+{
+    Name = p.Name,
+    Material = p.Material is null ? new MaterialSettings() : MapMaterial(p.Material),
+    Materials = p.ModelMaterials.Select(ToModel).ToList(),
+};
