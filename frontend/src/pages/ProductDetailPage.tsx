@@ -3,10 +3,15 @@ import { Link, useParams } from 'react-router-dom';
 import { ProductCard } from '../components/ProductCard';
 import { api } from '../lib/api';
 import { formatPrice } from '../lib/format';
+import { useArSupport } from '../lib/useArSupport';
 import type { Product, ProductSummary } from '../lib/types';
 
 const ProductViewer = lazy(() =>
   import('../components/ProductViewer').then((m) => ({ default: m.ProductViewer })),
+);
+
+const ProductAR = lazy(() =>
+  import('../components/ProductAR').then((m) => ({ default: m.ProductAR })),
 );
 
 export function ProductDetailPage() {
@@ -18,6 +23,8 @@ export function ProductDetailPage() {
   const [activeImage, setActiveImage] = useState(0);
   const [view, setView] = useState<'3d' | 'photo'>('photo');
   const [activeVariant, setActiveVariant] = useState<number | null>(null);
+  const [arOpen, setArOpen] = useState(false);
+  const [arSupported] = useArSupport();
 
   useEffect(() => {
     if (!slug) return;
@@ -49,6 +56,8 @@ export function ProductDetailPage() {
       </div>
     );
   }
+
+  const isWearable = /watch|wearable/i.test(`${product.category} ${product.slug}`);
 
   return (
     <div className="container page">
@@ -168,6 +177,16 @@ export function ProductDetailPage() {
           <button type="button" className="btn btn-primary btn-lg btn-block">
             Add to cart
           </button>
+
+          {product.modelUrl && isWearable && arSupported && (
+            <button
+              type="button"
+              className="btn btn-secondary btn-lg btn-block"
+              onClick={() => setArOpen(true)}
+            >
+              Try it on your wrist (AR)
+            </button>
+          )}
           <p className="muted small">Demo marketplace — no checkout is wired up yet.</p>
 
           <div className="seller-box">
@@ -216,6 +235,18 @@ export function ProductDetailPage() {
             {related.map((p) => <ProductCard key={p.slug} product={p} />)}
           </div>
         </section>
+      )}
+
+      {arOpen && product.modelUrl && (
+        <Suspense fallback={null}>
+          <ProductAR
+            modelUrl={product.modelUrl}
+            material={product.material}
+            modelMaterials={product.modelMaterials}
+            revision={product.updatedAt}
+            onExit={() => setArOpen(false)}
+          />
+        </Suspense>
       )}
     </div>
   );
