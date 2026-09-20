@@ -31,6 +31,8 @@ export interface ColorVariant {
 
 export interface ModelMaterial {
   index: number;
+  /** Immutable GLB material name; never shown or edited. Renames of `label` can't break matching. */
+  glbName?: string | null;
   label: string;
   material: Material;
 }

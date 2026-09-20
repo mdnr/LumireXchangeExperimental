@@ -66,13 +66,7 @@ auth + seller tools, ready to deploy to a free server later.
 
 ## Known remaining bug (continue tomorrow)
 
-- **After renaming a part, changing its colour/sliders does NOT update the 3D preview.**
-  Once a label no longer matches the GLB material name, the position fallback
-  (`slots[preset.index]`) maps to the wrong slot, so the 3D ignores the change. Fix idea: store an
-  immutable hidden `glbName` matcher on each `ModelMaterial` (server + DTO + seeder + upload path)
-  and always match by it — never by the user-visible label. Then renames can’t affect recolouring.
-  Also verify `Object.values(gltf.materials)` ordering against server indices (duplicate GLB
-  material names collapse keys and shift positions).
+- ~~After renaming a part, changing its colour/sliders does NOT update the 3D preview.~~ **FIXED (2026-09-20)**: every `ModelMaterial` now carries an immutable `glbName` (the material's original name inside the GLB). The 3D preview (`applyMaterialPresets`) matches parts by `glbName` first — never by the user-visible label — so renames can't affect recolouring. Backed by a seeder backfill (`BackfillMaterialNamesAsync`) that patches existing rows (top-level parts + per-variant copies) from the stored `.glb`; upload endpoint and all seeder sites set `glbName`.
 
 ## Next up
 

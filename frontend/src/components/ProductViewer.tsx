@@ -131,13 +131,15 @@ function applyMaterial(root: THREE.Object3D, material?: Material): void {
 
 function applyMaterialPresets(materialMap: Record<string, THREE.Material>, presets?: ModelMaterial[]): void {
   if (!presets || presets.length === 0) return;
-  // Object.values preserves the GLB material order, matching the server's part indices.
-  // Match by the GLB material name (so renaming a part label never breaks recolouring),
-  // then fall back to position so unrenamed/older parts still land on the right slot.
+  // Match by the immutable GLB material name (glbName) so renaming a part label
+  // never breaks recolouring. Fall back to the label only for records written
+  // before glbName existed (the label equalled the GLB name then), then to the
+  // GLB position as a last resort.
   const slots = Object.values(materialMap);
   for (const preset of presets) {
     let target: THREE.Material | undefined;
-    if (preset.label) target = slots.find((m) => m.name === preset.label);
+    const matcher = preset.glbName?.trim() || preset.label?.trim();
+    if (matcher) target = slots.find((m) => m.name === matcher);
     if (!target && preset.index != null) target = slots[preset.index];
     if (target) {
       applyToMaterialInstance(target, preset.material);

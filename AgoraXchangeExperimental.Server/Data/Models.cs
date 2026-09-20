@@ -60,6 +60,9 @@ public class ColorVariant
 public class ModelMaterial
 {
     public int Index { get; set; }
+    // Immutable matcher: the material's original name inside the GLB. Kept hidden
+    // from the UI so renaming the user-visible Label can never break recolouring.
+    public string GlbName { get; set; } = string.Empty;
     public string Label { get; set; } = string.Empty;
     public MaterialSettings Settings { get; set; } = new();
 }

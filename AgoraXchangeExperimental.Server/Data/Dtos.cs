@@ -113,6 +113,7 @@ public class ColorVariantDto
     private static ModelMaterial ToModelMaterial(ModelMaterialDto m) => new()
     {
         Index = m.Index,
+        GlbName = m.GlbName,
         Label = m.Label,
         Settings = m.Material is null ? new MaterialSettings() : ToMaterial(m.Material)
     };
@@ -121,12 +122,14 @@ public class ColorVariantDto
 public class ModelMaterialDto
 {
     public int Index { get; set; }
+    public string GlbName { get; set; } = string.Empty;
     public string Label { get; set; } = string.Empty;
     public MaterialDto Material { get; set; } = new();
 
     public static ModelMaterialDto From(ModelMaterial m) => new()
     {
         Index = m.Index,
+        GlbName = m.GlbName,
         Label = m.Label,
         Material = MaterialDto.From(m.Settings)
     };

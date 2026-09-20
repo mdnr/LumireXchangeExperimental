@@ -445,6 +445,7 @@ productsApi.MapPost("/{slug}/model", async (string slug, IFormFile? file, Claims
     product.ModelMaterialsJson = JsonSerializer.Serialize(extracted.Select(e => new ModelMaterial
     {
         Index = e.Index,
+        GlbName = e.Name,
         Label = string.IsNullOrWhiteSpace(e.Name) ? $"Material {e.Index + 1}" : e.Name,
         Settings = existingMaterials.FirstOrDefault(m => m.Index == e.Index)?.Settings
             ?? new MaterialSettings { Color = palette.TryGetValue(e.Index, out var hex) ? hex : "#e8e8e8" }
@@ -560,6 +561,7 @@ static MaterialSettings MapMaterial(MaterialDto m)
 static ModelMaterial ToModel(ModelMaterialDto m) => new()
 {
     Index = m.Index,
+    GlbName = m.GlbName,
     Label = m.Label,
     Settings = m.Material is null ? new MaterialSettings() : MapMaterial(m.Material),
 };

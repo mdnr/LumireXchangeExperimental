@@ -100,6 +100,7 @@ public static class DbSeeder
         await BackfillVariantsAsync(db, services);
         await EnsureColorPresetsAsync(db);
         await BackfillVariantLooksAsync(db);
+        await BackfillMaterialNamesAsync(db, services);
     }
 
     private static async Task BackfillVariantsAsync(AppDbContext db, IServiceProvider services)
@@ -133,6 +134,7 @@ public static class DbSeeder
                 return new ModelMaterial
                 {
                     Index = e.Index,
+                    GlbName = e.Name,
                     Label = label,
                     Settings = new MaterialSettings
                     {
@@ -188,6 +190,7 @@ public static class DbSeeder
                     Materials = materials.Select(m => new ModelMaterial
                     {
                         Index = m.Index,
+                        GlbName = m.GlbName,
                         Label = m.Label,
                         Settings = new MaterialSettings { SurfaceType = "color", Color = "#0d0d10", Finish = "chrome", Metalness = 0.9, Roughness = 0.1, Clearcoat = 0.6, TextureUrl = m.Settings.TextureUrl }
                     }).ToList()
@@ -202,6 +205,7 @@ public static class DbSeeder
                     Materials = materials.Select(m => new ModelMaterial
                     {
                         Index = m.Index,
+                        GlbName = m.GlbName,
                         Label = m.Label,
                         Settings = new MaterialSettings { SurfaceType = "color", Color = "#eef1f5", Finish = "matte", Metalness = 0.05, Roughness = 0.7, Clearcoat = 0.1, TextureUrl = m.Settings.TextureUrl }
                     }).ToList()
@@ -214,6 +218,68 @@ public static class DbSeeder
                 product.ColorPresetsJson = JsonSerializer.Serialize(presets, Json.Options);
                 changed = true;
             }
+        }
+
+        if (changed)
+        {
+            await db.SaveChangesAsync();
+        }
+    }
+
+    private static async Task BackfillMaterialNamesAsync(AppDbContext db, IServiceProvider services)
+    {
+        var env = services.GetRequiredService<IWebHostEnvironment>();
+        var products = await db.Products.ToListAsync();
+        var changed = false;
+        foreach (var product in products)
+        {
+            var parts = Json.JsonList<ModelMaterial>(product.ModelMaterialsJson);
+            var variants = Json.JsonList<ColorVariant>(product.VariantsJson);
+            var partsNeedName = parts.Any(m => string.IsNullOrWhiteSpace(m.GlbName));
+            var variantsNeedName = variants.Any(v => v.ModelMaterials is { Count: > 0 } ms && ms.Any(m => string.IsNullOrWhiteSpace(m.GlbName)));
+            if (!partsNeedName && !variantsNeedName)
+            {
+                continue;
+            }
+
+            var glbNames = new Dictionary<int, string>();
+            if (!string.IsNullOrEmpty(product.ModelUrl))
+            {
+                var glbPath = Path.Combine(env.ContentRootPath, "wwwroot", product.ModelUrl.TrimStart('/'));
+                foreach (var e in ModelFileReader.ExtractMaterials(glbPath))
+                {
+                    if (!string.IsNullOrWhiteSpace(e.Name))
+                    {
+                        glbNames[e.Index] = e.Name;
+                    }
+                }
+            }
+
+            foreach (var m in parts)
+            {
+                if (string.IsNullOrWhiteSpace(m.GlbName))
+                {
+                    m.GlbName = glbNames.TryGetValue(m.Index, out var name) ? name : m.Label;
+                }
+            }
+            foreach (var v in variants)
+            {
+                if (v.ModelMaterials is null)
+                {
+                    continue;
+                }
+                foreach (var m in v.ModelMaterials)
+                {
+                    if (string.IsNullOrWhiteSpace(m.GlbName))
+                    {
+                        m.GlbName = glbNames.TryGetValue(m.Index, out var name) ? name : m.Label;
+                    }
+                }
+            }
+
+            product.ModelMaterialsJson = JsonSerializer.Serialize(parts, Json.Options);
+            product.VariantsJson = JsonSerializer.Serialize(variants, Json.Options);
+            changed = true;
         }
 
         if (changed)
@@ -309,6 +375,7 @@ public static class DbSeeder
                 variant.ModelMaterials = parts.Select(m => new ModelMaterial
                 {
                     Index = m.Index,
+                    GlbName = m.GlbName,
                     Label = m.Label,
                     Settings = new MaterialSettings
                     {
@@ -347,6 +414,7 @@ public static class DbSeeder
     private static ModelMaterial CloneModelMaterial(ModelMaterial m) => new()
     {
         Index = m.Index,
+        GlbName = m.GlbName,
         Label = m.Label,
         Settings = CloneMaterial(m.Settings)
     };
