@@ -540,6 +540,10 @@ app.UseStaticFiles(new StaticFileOptions
     ServeUnknownFileTypes = true
 });
 
+// SPA fallback: any route not matched by an API endpoint serves the frontend
+// so deep links (e.g. /products/:slug) work in production.
+app.MapFallbackToFile("index.html");
+
 app.Run();
 
 static MaterialSettings MapMaterial(MaterialDto m)
