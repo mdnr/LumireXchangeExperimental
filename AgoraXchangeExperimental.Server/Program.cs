@@ -22,7 +22,8 @@ builder.AddServiceDefaults();
 // Add services to the container.
 builder.Services.AddProblemDetails();
 
-builder.Services.AddOpenApi();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
 
 builder.Services.AddCors(options =>
 {
@@ -100,7 +101,8 @@ app.UseCors();
 
 if (app.Environment.IsDevelopment())
 {
-    app.MapOpenApi();
+    app.UseSwagger();
+    app.UseSwaggerUI();
 }
 
 app.UseAuthentication();
@@ -532,6 +534,7 @@ app.MapDefaultEndpoints();
 var staticContentTypes = new FileExtensionContentTypeProvider();
 staticContentTypes.Mappings[".glb"] = "model/gltf-binary";
 staticContentTypes.Mappings[".gltf"] = "model/gltf+json";
+staticContentTypes.Mappings[".usdz"] = "model/vnd.usdz+zip";
 
 app.UseDefaultFiles();
 app.UseStaticFiles(new StaticFileOptions

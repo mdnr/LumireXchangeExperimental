@@ -6,12 +6,24 @@ import { formatPrice } from '../lib/format';
 import { useArSupport } from '../lib/useArSupport';
 import type { Product, ProductSummary } from '../lib/types';
 
+function isMobile(): boolean {
+  return /iPhone|iPad|iPod|Android|Mobile|Tablet/i.test(navigator.userAgent) || navigator.maxTouchPoints > 1;
+}
+
+function usdzUrlFor(modelUrl: string): string {
+  return modelUrl.replace(/\.glb(\?.*)?$/i, '.usdz');
+}
+
 const ProductViewer = lazy(() =>
   import('../components/ProductViewer').then((m) => ({ default: m.ProductViewer })),
 );
 
 const ProductAR = lazy(() =>
   import('../components/ProductAR').then((m) => ({ default: m.ProductAR })),
+);
+
+const ProductARScan = lazy(() =>
+  import('../components/ProductARScan').then((m) => ({ default: m.ProductARScan })),
 );
 
 export function ProductDetailPage() {
@@ -23,7 +35,7 @@ export function ProductDetailPage() {
   const [activeImage, setActiveImage] = useState(0);
   const [view, setView] = useState<'3d' | 'photo'>('photo');
   const [activeVariant, setActiveVariant] = useState<number | null>(null);
-  const [arOpen, setArOpen] = useState(false);
+  const [arOpen, setArOpen] = useState<'webxr' | 'scan' | null>(null);
   const [arSupported] = useArSupport();
 
   useEffect(() => {
@@ -58,6 +70,9 @@ export function ProductDetailPage() {
   }
 
   const isWearable = /watch|wearable/i.test(`${product.category} ${product.slug}`);
+  const activeVariantData = product.variants.find((v) => v.id === activeVariant) ?? null;
+  const arMaterial = activeVariantData?.material ?? product.material;
+  const arModelMaterials = activeVariantData?.modelMaterials ?? product.modelMaterials;
 
   return (
     <div className="container page">
@@ -182,7 +197,16 @@ export function ProductDetailPage() {
             <button
               type="button"
               className="btn btn-secondary btn-lg btn-block"
-              onClick={() => setArOpen(true)}
+              onClick={() => setArOpen('webxr')}
+            >
+              Try it on your wrist (AR)
+            </button>
+          )}
+          {product.modelUrl && isWearable && !arSupported && isMobile() && (
+            <button
+              type="button"
+              className="btn btn-secondary btn-lg btn-block"
+              onClick={() => setArOpen('scan')}
             >
               Try it on your wrist (AR)
             </button>
@@ -237,14 +261,26 @@ export function ProductDetailPage() {
         </section>
       )}
 
-      {arOpen && product.modelUrl && (
+      {arOpen === 'webxr' && product.modelUrl && (
         <Suspense fallback={null}>
           <ProductAR
             modelUrl={product.modelUrl}
-            material={product.material}
-            modelMaterials={product.modelMaterials}
+            material={arMaterial}
+            modelMaterials={arModelMaterials}
             revision={product.updatedAt}
-            onExit={() => setArOpen(false)}
+            onExit={() => setArOpen(null)}
+          />
+        </Suspense>
+      )}
+      {arOpen === 'scan' && product.modelUrl && (
+        <Suspense fallback={null}>
+          <ProductARScan
+            modelUrl={product.modelUrl}
+            material={arMaterial}
+            modelMaterials={arModelMaterials}
+            revision={product.updatedAt}
+            usdzUrl={usdzUrlFor(product.modelUrl)}
+            onExit={() => setArOpen(null)}
           />
         </Suspense>
       )}
