@@ -250,6 +250,59 @@ const [faceDeg, setFaceDeg] = useState(FACE_DEG);
     scene.add(wristAnchor);
     wristAnchor.add(watchGroup);
 
+    // Axis probe. The watch is parented here and the model is recentred on its
+    // own bounding box, so the group origin is the model centre and an arrow
+    // drawn along a local axis shows exactly where that axis points on screen.
+    // A bounding box says which axis is the thinnest but not which one the dial
+    // actually faces, and the two came apart on this model, so the dial axis is
+    // read off the screen instead of being inferred. Labels rather than colours,
+    // because red against green is the one pair that cannot be told apart.
+    const AXES = new URLSearchParams(window.location.search).has('ar-axes');
+    if (AXES) {
+      const label = (text: string, hex: number) => {
+        const c = document.createElement('canvas');
+        c.width = 96;
+        c.height = 96;
+        const g = c.getContext('2d');
+        if (g) {
+          g.fillStyle = `#${hex.toString(16).padStart(6, '0')}`;
+          g.font = 'bold 64px system-ui, sans-serif';
+          g.textAlign = 'center';
+          g.textBaseline = 'middle';
+          g.fillText(text, 48, 50);
+        }
+        const s = new THREE.Sprite(
+          new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false, transparent: true })
+        );
+        s.scale.setScalar(0.17);
+        return s;
+      };
+      const probe = new THREE.Group();
+      const axes: [string, THREE.Vector3, number][] = [
+        ['X', new THREE.Vector3(1, 0, 0), 0xff453a],
+        ['Y', new THREE.Vector3(0, 1, 0), 0x32d74b],
+        ['Z', new THREE.Vector3(0, 0, 1), 0x0a84ff],
+      ];
+      for (const [name, dir, hex] of axes) {
+        const arrow = new THREE.ArrowHelper(dir, new THREE.Vector3(), 0.15, hex, 0.055, 0.035);
+        arrow.traverse((o) => {
+          const m = (o as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
+          if (m) {
+            for (const one of Array.isArray(m) ? m : [m]) {
+              one.depthTest = false;
+              one.transparent = true;
+            }
+          }
+        });
+        arrow.renderOrder = 999;
+        const tag = label(name, hex);
+        tag.position.copy(dir).multiplyScalar(0.2);
+        tag.renderOrder = 1000;
+        probe.add(arrow, tag);
+      }
+      watchGroup.add(probe);
+    }
+
     // No occluder, deliberately. Masking the watch against the arm was cutting
     // away parts of it that should stay visible, and a watch that ducks behind
     // your wrist when you turn your hand is not what a try-on is for. Instead the
@@ -407,6 +460,7 @@ const [faceDeg, setFaceDeg] = useState(FACE_DEG);
         `palmN  ${wristNormal.x.toFixed(2)}  ${wristNormal.y.toFixed(2)}  ${wristNormal.z.toFixed(2)}`,
         `armD   ${armDir.x.toFixed(2)}  ${armDir.y.toFixed(2)}  ${armDir.z.toFixed(2)}`,
         `facing ${faceState.deg}   forearm ${spinState.deg}   armR ${Math.round(pose.armR)}px`,
+        ...(AXES ? ['probe: X red  Y green  Z blue'] : []),
         diag.err ? `ERR ${diag.err.slice(0, 40)}` : `result ${age >= 0 ? `${age}ms` : 'never'}   send ${diag.sendMs}ms`,
       ];
       const size = Math.max(11, Math.min(15, Math.round(w / 34)));
