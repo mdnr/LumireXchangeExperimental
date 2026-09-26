@@ -2162,6 +2162,31 @@ textarea {
   border-top: 1px solid var(--border);
 }
 
+/* The reference hand is a CC BY asset, so the credit has to be visible on the
+   page that uses it, not only in a file in the repository. */
+.align-credit {
+  margin: 0;
+  padding: 0 16px 12px;
+}
+
+.align-credit a {
+  color: inherit;
+}
+
+/* Plain-language steps, so the seller is not left inferring the procedure from a
+   row of sliders. */
+.align-steps {
+  margin: 12px 0 0;
+  padding-left: 20px;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+}
+
+.align-steps li + li {
+  margin-top: 4px;
+}
+
+
 /* Frame axis tags, drawn inside the 3D canvas. Labelled in words as well as
    colour, because red against green is the one pair that cannot be told apart. */
 .align-axis-tag {
