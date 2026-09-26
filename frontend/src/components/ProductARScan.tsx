@@ -396,34 +396,35 @@ const [faceDeg, setFaceDeg] = useState(FACE_DEG);
         ctx.stroke();
       }
       const age = diag.lastMs ? Math.round(performance.now() - diag.lastMs) : -1;
-      ctx.font = '12px system-ui, -apple-system, sans-serif';
-      ctx.fillStyle = 'rgba(10, 10, 20, 0.6)';
-      ctx.fillRect(8, 8, 330, 96);
-      ctx.fillStyle = '#4dd0e1';
-      ctx.fillText(`engine: ${diag.state}   video: ${d.vw}x${d.vh}`, 14, 24);
-      ctx.fillText(`hands: ${diag.hands}   wrist: ${Math.round(diag.wristPx)}px   gl: ${glFrames}fr`, 14, 40);
-      ctx.fillText(
-        `palm: ${side.palm > 0 ? 'at camera' : 'away'}   twist: ${pose.far ? 'rolled over' : 'up'}   face lock: ${FACE_TIGHTNESS_TUNABLE.toFixed(2)}`,
-        14,
-        56,
-      );
-      ctx.fillText(
-        `standoff: ${Math.round(pose.armR)}px   wrist: ${Math.round(pose.wristPx)}px   depth: ${Math.round(cam.far)}px   roll: ${pose.metric3d ? `${roll.deg.toFixed(0)}deg (3D)` : 'n/a (pinned)'}`,
-        14,
-        72,
-      );
-      ctx.fillText(
-        `palmN: ${wristNormal.x.toFixed(2)}, ${wristNormal.y.toFixed(2)}, ${wristNormal.z.toFixed(2)}   armD: ${armDir.x.toFixed(2)}, ${armDir.y.toFixed(2)}, ${armDir.z.toFixed(2)}   facing: ${faceState.deg}  spin: ${spinState.deg}`,
-        14,
-        88,
-      );
-      ctx.fillText(
-        diag.err
-          ? `err: ${diag.err.slice(0, 42)}`
-          : `last result: ${age >= 0 ? `${age}ms ago` : 'never'}   send time: ${diag.sendMs}ms`,
-        14,
-        88,
-      );
+      // Built as a list and measured, so lines can never be laid over each other
+      // and the panel always fits whatever is in it.
+      const lines = [
+        `engine ${diag.state}   video ${d.vw}x${d.vh}   gl ${glFrames}fr`,
+        `hands ${diag.hands}   wrist ${Math.round(diag.wristPx)}px   roll ${
+          pose.metric3d ? `${roll.deg.toFixed(0)}deg 3D` : 'PINNED'
+        }`,
+        `palmN  ${wristNormal.x.toFixed(2)}  ${wristNormal.y.toFixed(2)}  ${wristNormal.z.toFixed(2)}`,
+        `armD   ${armDir.x.toFixed(2)}  ${armDir.y.toFixed(2)}  ${armDir.z.toFixed(2)}`,
+        `facing ${faceState.deg}   spin ${spinState.deg}   armR ${Math.round(pose.armR)}px`,
+        diag.err ? `ERR ${diag.err.slice(0, 40)}` : `result ${age >= 0 ? `${age}ms` : 'never'}   send ${diag.sendMs}ms`,
+      ];
+      const size = Math.max(11, Math.min(15, Math.round(w / 34)));
+      const lh = size + 5;
+      ctx.font = `${size}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+      const pad = 8;
+      const boxW = Math.min(w - 16, Math.ceil(ctx.measureText(lines.reduce((a, l) => (l.length > a.length ? l : a), '')).width) + pad * 2);
+      const boxH = lines.length * lh + pad * 2 - 4;
+      ctx.fillStyle = 'rgba(8, 8, 16, 0.82)';
+      ctx.fillRect(8, 8, boxW, boxH);
+      ctx.strokeStyle = 'rgba(77, 208, 225, 0.5)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(8.5, 8.5, boxW - 1, boxH - 1);
+      lines.forEach((line, i) => {
+        // The two numbers that decide the bug are called out so they are not
+        // lost in the noise on a small screen.
+        ctx.fillStyle = line.startsWith('palmN') ? '#ffd740' : line.startsWith('armD') ? '#4dd0e1' : '#e8e8f0';
+        ctx.fillText(line, 8 + pad, 8 + pad + lh * i + size);
+      });
     };
 
     const s = stateRef.current;
