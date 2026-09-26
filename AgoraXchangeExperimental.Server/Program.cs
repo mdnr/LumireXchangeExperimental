@@ -362,6 +362,15 @@ productsApi.MapPut("/{slug}", async (string slug, ProductInputDto input, ClaimsP
     product.VariantsJson = JsonSerializer.Serialize(input.Variants.Select(v => v.ToModel()).ToList(), Json.Options);
     product.ModelMaterialsJson = JsonSerializer.Serialize(input.ModelMaterials.Select(ToModel).ToList(), Json.Options);
     product.ColorPresetsJson = JsonSerializer.Serialize(input.ColorPresets.Select(ToPreset).ToList(), Json.Options);
+    // Pointing a product at a different model invalidates its alignment, for the
+    // same reason replacing the file does. Comparing the URLs rather than clearing
+    // unconditionally keeps a save that merely re-submits the same URL, which is
+    // what the edit form does on every unrelated field change, from silently
+    // throwing the seller's work away.
+    if (!string.Equals(product.ModelUrl, input.ModelUrl, StringComparison.Ordinal))
+    {
+        product.ModelAlignmentJson = string.Empty;
+    }
     product.ModelUrl = input.ModelUrl;
     product.ModelPosterUrl = input.ModelPosterUrl;
     if (input.Material is not null)
@@ -422,6 +431,71 @@ productsApi.MapDelete("/{slug}", async (string slug, ClaimsPrincipal principal, 
 .RequireAuthorization(policy => policy.RequireRole("Seller"))
 .WithName("DeleteProduct");
 
+// The seller's chosen wrist placement, written on its own so that saving the rest
+// of the product can never disturb it. Sending null clears the alignment and puts
+// the model back to its authored orientation, which is the same operation as the
+// align page's reset, so the two cannot drift apart.
+productsApi.MapPut("/{slug}/alignment", async (string slug, ModelAlignmentDto? input, ClaimsPrincipal principal, UserManager<AppUser> userManager, AppDbContext db) =>
+{
+    var seller = await userManager.GetUserAsync(principal);
+    if (seller is null)
+    {
+        return Results.Unauthorized();
+    }
+
+    var product = await db.Products.FirstOrDefaultAsync(p => p.Slug == slug);
+    if (product is null)
+    {
+        return Results.NotFound();
+    }
+
+    if (product.SellerId != seller.Id)
+    {
+        return Results.Forbid();
+    }
+
+    if (input is null)
+    {
+        product.ModelAlignmentJson = "";
+    }
+    else
+    {
+        // A quaternion that is not unit length is not a rotation, and letting one
+        // through would shear or scale the model on the wrist. Normalise here so
+        // a bad value from the client cannot produce a broken try-on.
+        var saved = input.ToModel();
+        var length = Math.Sqrt((double)saved.QuatX * saved.QuatX + (double)saved.QuatY * saved.QuatY + (double)saved.QuatZ * saved.QuatZ + (double)saved.QuatW * saved.QuatW);
+        if (length < 1e-6)
+        {
+            saved.QuatX = 0;
+            saved.QuatY = 0;
+            saved.QuatZ = 0;
+            saved.QuatW = 1;
+        }
+        else
+        {
+            saved.QuatX = (float)(saved.QuatX / length);
+            saved.QuatY = (float)(saved.QuatY / length);
+            saved.QuatZ = (float)(saved.QuatZ / length);
+            saved.QuatW = (float)(saved.QuatW / length);
+        }
+
+        // A zero or negative scale would collapse the model to nothing, and a huge
+        // one would swallow the screen.
+        saved.Scale = Math.Clamp(saved.Scale, 0.05, 10);
+        saved.OffsetX = Math.Clamp(saved.OffsetX, -10, 10);
+        saved.OffsetY = Math.Clamp(saved.OffsetY, -10, 10);
+        saved.OffsetZ = Math.Clamp(saved.OffsetZ, -10, 10);
+        product.ModelAlignmentJson = JsonSerializer.Serialize(saved, Json.Options);
+    }
+
+    product.UpdatedAt = DateTime.UtcNow;
+    await db.SaveChangesAsync();
+    return Results.Ok(new { alignment = Json.Alignment(product.ModelAlignmentJson) is { } a ? ModelAlignmentDto.From(a) : null });
+})
+.RequireAuthorization(policy => policy.RequireRole("Seller"))
+.WithName("SaveModelAlignment");
+
 productsApi.MapPost("/{slug}/model", async (string slug, IFormFile? file, ClaimsPrincipal principal, UserManager<AppUser> userManager, AppDbContext db, IWebHostEnvironment env) =>
 {
     var seller = await userManager.GetUserAsync(principal);
@@ -465,6 +539,12 @@ productsApi.MapPost("/{slug}/model", async (string slug, IFormFile? file, Claims
     }
 
     product.ModelUrl = $"/models/{fileName}";
+
+    // A new model file has its own orientation and size, so any alignment saved
+    // against the previous one is now meaningless. Clearing it makes the try-on
+    // show a plainly unrotated watch and the align page report that it needs
+    // attention, instead of quietly applying a transform that is subtly wrong.
+    product.ModelAlignmentJson = string.Empty;
 
     var existingMaterials = Json.JsonList<ModelMaterial>(product.ModelMaterialsJson);
     var variants = Json.JsonList<ColorVariant>(product.VariantsJson);

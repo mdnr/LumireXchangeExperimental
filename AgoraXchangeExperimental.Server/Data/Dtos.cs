@@ -22,6 +22,28 @@ public static class Json
             return [];
         }
     }
+
+    /// <summary>
+    /// A product with no saved alignment returns null, which is not an error: the
+    /// buyer page then falls back to the unrotated model so an unaligned product
+    /// still shows something rather than failing to load.
+    /// </summary>
+    public static ModelAlignment? Alignment(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<ModelAlignment>(json, Options);
+        }
+        catch
+        {
+            return null;
+        }
+    }
 }
 
 public record AuthResponse(string Token, string Email, string DisplayName, string[] Roles);
@@ -156,6 +178,45 @@ public class SellerDto
     public string Email { get; set; } = string.Empty;
 }
 
+// Chosen by the seller on the align page, against a reference hand whose frame is
+// fixed and labelled: +X up the forearm, +Y around the wrist, +Z out of the back of
+// the hand. Returned to the buyer page and applied verbatim at try-on.
+public class ModelAlignmentDto
+{
+    public float QuatX { get; set; }
+    public float QuatY { get; set; }
+    public float QuatZ { get; set; }
+    public float QuatW { get; set; } = 1f;
+    public double OffsetX { get; set; }
+    public double OffsetY { get; set; }
+    public double OffsetZ { get; set; }
+    public double Scale { get; set; } = 1d;
+
+    public static ModelAlignmentDto From(ModelAlignment a) => new()
+    {
+        QuatX = a.QuatX,
+        QuatY = a.QuatY,
+        QuatZ = a.QuatZ,
+        QuatW = a.QuatW,
+        OffsetX = a.OffsetX,
+        OffsetY = a.OffsetY,
+        OffsetZ = a.OffsetZ,
+        Scale = a.Scale
+    };
+
+    public ModelAlignment ToModel() => new()
+    {
+        QuatX = QuatX,
+        QuatY = QuatY,
+        QuatZ = QuatZ,
+        QuatW = QuatW,
+        OffsetX = OffsetX,
+        OffsetY = OffsetY,
+        OffsetZ = OffsetZ,
+        Scale = Scale
+    };
+}
+
 public class ProductSummaryDto
 {
     public string Slug { get; set; } = string.Empty;
@@ -195,6 +256,7 @@ public class ProductDto : ProductSummaryDto
     public List<ColorVariantDto> Variants { get; set; } = [];
     public List<ModelMaterialDto> ModelMaterials { get; set; } = [];
     public List<ColorPresetDto> ColorPresets { get; set; } = [];
+    public ModelAlignmentDto? ModelAlignment { get; set; }
     public SellerDto Seller { get; set; } = new();
     public DateTime UpdatedAt { get; set; }
 
@@ -217,6 +279,7 @@ public class ProductDto : ProductSummaryDto
         Variants = Json.JsonList<ColorVariant>(p.VariantsJson).Select(ColorVariantDto.From).ToList(),
         ModelMaterials = Json.JsonList<ModelMaterial>(p.ModelMaterialsJson).Select(ModelMaterialDto.From).ToList(),
         ColorPresets = Json.JsonList<ColorPreset>(p.ColorPresetsJson).Select(ColorPresetDto.From).ToList(),
+        ModelAlignment = Json.Alignment(p.ModelAlignmentJson) is { } align ? ModelAlignmentDto.From(align) : null,
         Seller = new SellerDto
         {
             Id = p.Seller?.Id ?? p.SellerId,
@@ -246,6 +309,10 @@ public class ProductInputDto
     public List<ColorVariantDto> Variants { get; set; } = [];
     public List<ModelMaterialDto> ModelMaterials { get; set; } = [];
     public List<ColorPresetDto> ColorPresets { get; set; } = [];
+    // Deliberately absent from the input DTO. Alignment is written only by the
+    // dedicated /alignment endpoint, so the full-document product PUT can never
+    // clear it by omission: the studio form does not carry the field, and a
+    // save-from-the-form must not silently undo the seller's alignment.
 }
 
 public static class Slugger

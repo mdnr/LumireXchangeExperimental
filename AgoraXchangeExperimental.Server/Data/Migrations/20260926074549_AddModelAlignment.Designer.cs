@@ -3,6 +3,7 @@ using System;
 using AgoraXchangeExperimental.Server.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,12 +11,14 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace AgoraXchangeExperimental.Server.Data.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260926074549_AddModelAlignment")]
+    partial class AddModelAlignment
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
-            modelBuilder.HasAnnotation("ProductVersion", "10.0.11");
+            modelBuilder.HasAnnotation("ProductVersion", "8.0.11");
 
             modelBuilder.Entity("AgoraXchangeExperimental.Server.Data.AppUser", b =>
                 {
@@ -105,7 +108,7 @@ namespace AgoraXchangeExperimental.Server.Data.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
-                    b.PrimitiveCollection<string>("Colors")
+                    b.Property<string>("Colors")
                         .IsRequired()
                         .HasColumnType("TEXT");
 
@@ -120,7 +123,7 @@ namespace AgoraXchangeExperimental.Server.Data.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
-                    b.PrimitiveCollection<string>("ImageUrls")
+                    b.Property<string>("ImageUrls")
                         .IsRequired()
                         .HasColumnType("TEXT");
 

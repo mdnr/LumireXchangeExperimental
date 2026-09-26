@@ -29,9 +29,31 @@ public class Product
     public string ColorPresetsJson { get; set; } = "[]";
     public string? ModelUrl { get; set; }
     public string? ModelPosterUrl { get; set; }
+    public string ModelAlignmentJson { get; set; } = "";
     public MaterialSettings Material { get; set; } = new();
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+}
+
+// How a model sits on a wrist, chosen by the seller against a reference hand and
+// then applied verbatim at try-on time. Every GLB is authored differently: dial
+// on any of the three axes, band running any way, case tipped off square. Inferring
+// that from geometry is guesswork, so the seller states it once and it is stored.
+//
+// Rotation is a quaternion, not Euler angles, because the order and the frame an
+// angle is measured in are exactly the details that go wrong when a transform is
+// round-tripped through storage. Offsets are in wrist widths, the same unit the
+// tracker measures the wrist in, so one saved alignment fits any hand size.
+public class ModelAlignment
+{
+    public float QuatX { get; set; }
+    public float QuatY { get; set; }
+    public float QuatZ { get; set; }
+    public float QuatW { get; set; } = 1f;
+    public double OffsetX { get; set; }
+    public double OffsetY { get; set; }
+    public double OffsetZ { get; set; }
+    public double Scale { get; set; } = 1d;
 }
 
 public class MaterialSettings
