@@ -6,13 +6,42 @@ Live site: https://mdnr.alwaysdata.net
 
 ## Repo state right now
 
-- Branch `master`, no remote (deploy is manual, see below).
-- Working tree is clean apart from this notes file, which is untracked.
-- Deployed: `90d69f6` as `ProductARScan-DMpgw0W8.js`.
+- Branch `master`, published to the remote as `dotnet-vite-app`. The remote's
+  `master` is an unrelated Next.js project and must never be pushed to.
+  - `ar-alignment-seller-set` -> `205016e`, the seller alignment work
+  - `ar-reference-hand` -> `e15aa93`, the rigged reference hand, no bangle,
+    rotation sliders. **This is what is live.**
+- Deployed: `e15aa93` as `index-C8LPQc_P.js` / `index-BwFrOMB7.css`.
 - **Dial faces the camera, confirmed by the user on a real device**, back of
   hand to the lens.
 - **Rotation direction confirmed correct on the rear camera.** It only looked
   inverted on the selfie preview, which is mirrored. Do not "fix" this.
+
+### The wrist frame, and why nothing infers orientation any more
+
+`+X` up the forearm, `+Y` around the wrist, `+Z` out of the back of the hand.
+Both renderers measure all three, so `watchQuat = wristBasis * savedAlignment` is
+exact by construction. The bounding-box axis inference and the spin, facing and
+tilt trims are gone and must not come back.
+
+`+Y` is the thumb side. The bundled hand puts its thumb there, and the
+fingernails are the one unambiguous way to tell the back of the hand from the
+palm, so they are the load-bearing detail of the whole page.
+
+### The reference hand
+
+Bundled from Poly Pizza, CC BY, credited on the align page and in
+`frontend/public/ASSETS.md`. It is placed by measurements taken from the file,
+not by eye: a half turn about X, scale `1 / 0.9061` for the wrist breadth in the
+file, and the wrist centre subtracted so the wrist sits on the origin the page's
+numbers are measured from. Those constants live in
+`frontend/src/lib/referenceHand.ts` and the reasoning is in the commit message
+for `e15aa93`.
+
+Known limitation: the model is 2.88 wrist widths from wrist to middle fingertip
+where an adult is nearer 3.4, so it reads slightly small. Every directional cue
+is correct, which is what the page needs. It has not been reviewed by eye yet,
+only asserted numerically.
 
 To return to the earlier checkpoint:
 
@@ -186,18 +215,80 @@ turns sit at zero and should stay there; they are trims, not the fix.
 
 ## Deploy
 
-`deploy.ps1` builds the frontend, merges it into `Server/wwwroot` and publishes.
-Then upload **explicitly, per file**, with sftp:
+Run `deploy.ps1`, then `upload-alwaysdata.ps1`. The second one builds the sftp
+batch from `publish/wwwroot` and uploads **explicitly, per file**:
 
 - `publish/wwwroot/index.html`
+- every other file in `publish/wwwroot/`, which is not just `index.html` any
+  more. `public/` assets land at the root of `wwwroot`, and skipping them is
+  how `reference-hand.glb` once failed to load while the page still built
 - every file in `publish/wwwroot/assets/`
 
 Never upload recursively, that previously created a wrong nested `wwwroot`.
 Static files need no Alwaysdata restart, but users must hard refresh.
 
+`upload-alwaysdata.ps1` uses key auth when the key is present and falls back to
+a password file otherwise. It prefers the key, because the private key never
+leaves `~/.ssh` and there is no secret to copy around. It is generated but **not
+yet registered** on the account, so deploys are still using the password.
+
+The password is read from `%TEMP%\opencode\ad-pass.txt` and deleted afterwards,
+so it never sits in a command line or in the repo. Create that file first:
+
+```powershell
+Set-Content -LiteralPath "$env:TEMP\opencode\ad-pass.txt" -Value '<password>' -NoNewline
+```
+
 **Preserve on the server:** `/home/mdnr/www/app.db`, `wwwroot/models/`, and
-remotely uploaded `wwwroot/images/`. The database backup is at
-`%TEMP%/opencode/app.db.backup`.
+remotely uploaded `wwwroot/images/`. Nothing is ever deleted by the upload, which
+is what keeps these safe. Stale hashed assets do accumulate on the server; they
+are harmless, since `index.html` only references the current ones. The database
+backup is at `%TEMP%/opencode/app.db.backup`.
+
+## Credentials
+
+### Finish key auth, then rotate the password
+
+The account password has been exposed in chat transcripts and shell history. It
+is not stored in any file in the repo, which is the right state, and that should
+stay true. Rotating it is still outstanding.
+
+Until then, deploys work by creating the password file. After rotation, the file
+becomes a fallback that is never needed.
+
+To finish key auth:
+
+1. Add this public key in the Alwaysdata admin panel, under SSH keys:
+
+   ```
+   ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ4lZ7HTevoicpZ7bJgkmjB9RTsma2psojjZV5RAaiON opencode deploy to mdnr@ssh-mdnr.alwaysdata.net
+   ```
+
+   Fingerprint of the private key, to match against the panel's own listing:
+
+   ```
+   SHA256:+7P6B5n3PS5/LbmGwR7ITv4P6Jy1o2vAwoa+3/aXa6o
+   ```
+
+2. Confirm it works, then rotate the password:
+
+   ```powershell
+   ssh -i "$env:USERPROFILE\.ssh\id_ed25519_alwaysdata" -o IdentitiesOnly=yes `
+       mdnr@ssh-mdnr.alwaysdata.net 'echo connected'
+   ```
+
+   Until this prints `connected` the account answers
+   `Permission denied (publickey,password,keyboard-interactive)`, which is the
+   expected "key not registered yet" result. The server does accept `publickey`,
+   so no Alwaysdata-side change is needed beyond adding the key.
+
+3. Delete `%TEMP%\opencode\ad-pass.txt` if one is lying around, and rotate the
+   account password in the admin panel.
+
+The host key is already trusted in `known_hosts`, recorded during the first
+password deploy. Its ED25519 fingerprint is
+`SHA256:5i/vJYokzNsnXAeHkwzEm+3kxPQWwsRzwXFPQ7oOvNI`; check that against
+Alwaysdata's published fingerprint if the account is ever rebuilt.
 
 ## Last known good builds
 
@@ -207,7 +298,9 @@ remotely uploaded `wwwroot/images/`. The database backup is at
 | `2e6c2c2` | `ProductARScan-B2exgz03.js` | metric 3D roll plus on-screen spin control. |
 | `a8e96b1` | `ProductARScan-DV2W4q9h.js` | adds the `?ar-axes` probe that found the dial axis. |
 | `fc564fa` | `ProductARScan-B4dMx8l7.js` | dial faces the camera. Facing fixed, band still crossways. |
-| `90d69f6` | `ProductARScan-DMpgw0W8.js` | **forearm on local X, band along the arm. Adds the tilt trim. Current.** |
+| `90d69f6` | `ProductARScan-DMpgw0W8.js` | forearm on local X, band along the arm, adds the tilt trim. |
+| `205016e` | `index-*` | seller-set alignment, shared wrist frame, capsule hand, flip controls. |
+| `e15aa93` | `index-C8LPQc_P.js` | **bundled rigged hand, no bangle, rotation sliders. Current, live.** |
 
 ## Credentials
 
