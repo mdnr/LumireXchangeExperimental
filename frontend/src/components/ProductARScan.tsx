@@ -43,11 +43,9 @@ const ARM_RADIUS_TUNABLE = numParam('ar-arm', ARM_RADIUS_FACTOR);
 // off the geometry. That single degree of freedom is a quarter turn about the
 // dial normal, exposed here so it can be set without a code change. Try
 // ?ar-spin=0, 90, 180 then 270.
-// Which way the watch sits, as a quarter turn about the forearm axis. The
-// forearm is the axis that swings the dial around the arm, so this is the
-// control that brings a dial pointing off to the side round to face the lens.
-// Rotating about the dial axis instead can only roll the watch in its own plane
-// and can never change which way the dial points.
+// A quarter turn about the forearm axis, kept as a trim override now that the
+// basis below puts the measured dial axis on the palm normal. Both dials default
+// to zero because zero is correct: the frame orients the watch on its own.
 const SPIN_DEG = ((((numParam('ar-spin', 0) % 360) + 360) % 360) / 90) * 90;
 // A second quarter turn, about the model's third axis, for the remaining degree
 // of freedom once the facing and forearm turns are set.
@@ -771,16 +769,19 @@ const [faceDeg, setFaceDeg] = useState(FACE_DEG);
               // should point, taken straight from the metric hand, so the watch
               // rolls with the wrist and shows its back once the hand turns over.
               //
-              // The model's dial faces along its own local X, measured from the
-              // GLB, so X takes the palm normal. Mapping it to any other axis
-              // is what left the watch sitting a quarter turn out. With +y along
-              // the forearm the frame is right handed by construction, since
-              // palmNormal x armAxis = across.
-              across.copy(wristNormal).cross(armDir);
-              if (across.lengthSq() < 1e-8) {
-                across.set(-armDir.y, armDir.x, 0);
-              }
-              across.normalize();
+              // The column order below was measured, not inferred. Reading the
+              // model's own axes off the screen with ?ar-axes puts the dial on
+              // local Z, not on local X as the bounding box suggested, since the
+              // thinnest axis of a watch is not the one its face looks out of.
+              // The band encircles the wrist, so its loop shares the dial's axis,
+              // which leaves the forearm on local Y. Hence Z takes the palm
+              // normal, Y runs up the arm, and X is left across the wrist.
+              //
+              // This is the same column order the fallback branch below already
+              // used, which is why that one sat plausibly on the wrist: it had
+              // the axes right and only a poor normal. With the columns in this
+              // order the frame stays right handed, because across x armDir
+              // returns faceDir for the third column.
               faceDir.copy(wristNormal);
               // Re-orthogonalise so the dial stays square to the forearm.
               faceDir.addScaledVector(armDir, -faceDir.dot(armDir));
@@ -788,7 +789,13 @@ const [faceDeg, setFaceDeg] = useState(FACE_DEG);
                 faceDir.copy(CAM_DIR);
               }
               faceDir.normalize();
-              poseBasis.makeBasis(faceDir, armDir, across);
+              across.crossVectors(armDir, faceDir);
+              if (across.lengthSq() < 1e-8) {
+                across.set(-armDir.y, armDir.x, 0);
+              }
+              across.normalize();
+              faceDir.crossVectors(across, armDir).normalize();
+              poseBasis.makeBasis(across, armDir, faceDir);
             } else {
               // No metric hand this frame, so hold the dial to the lens rather
               // than guessing a twist out of the 2D landmarks. Keeps the watch
