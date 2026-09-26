@@ -58,6 +58,11 @@ interface LandmarkPoint {
 }
 interface ScanResults {
   multiHandLandmarks: Array<Array<LandmarkPoint>>;
+  // The metric 3D hand, in metres, centred on the hand. This is a genuinely
+  // different measurement from the landmarks above: their z is a depth guess
+  // normalised against the image, whereas these are a real reconstruction and
+  // are what the wrist rotation is actually derived from.
+  multiHandWorldLandmarks?: Array<Array<LandmarkPoint>>;
 }
 interface HandController {
   setOptions: (options: Record<string, unknown>) => void;
@@ -260,7 +265,23 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
       // The measured wrist twist, kept purely for the debug readout now that
       // the watch is held facing the camera.
       far: false,
+      // True once a metric 3D frame has been accepted, which is what switches
+      // the watch from the pinned camera facing pose to real wrist rotation.
+      metric3d: false,
     };
+    // The palm frame rebuilt from the metric hand each detection. +y runs along
+    // the forearm, +x is the outward palm normal the dial faces, and +z spans
+    // the knuckles. Keeping it as a real orthonormal frame, rather than a pair
+    // of screen angles, is what gives the roll a direction and a full range
+    // instead of the symmetric sin(theta) the 2D landmarks can only produce.
+    const wArm = new THREE.Vector3();
+    const wAcross = new THREE.Vector3();
+    const wNormal = new THREE.Vector3();
+    // Locked once, on the first metric frame, so the watch keeps the side of
+    // the wrist that was facing the lens when tracking engaged. Re-deriving the
+    // sign every frame would flip the watch end over end as the roll passed
+    // through zero.
+    const roll = { decided: false, sign: 1, ref: new THREE.Vector3(0, 0, 1), refCross: new THREE.Vector3(1, 0, 0), deg: 0 };
     // The wrist frame is rebuilt from the 3D landmarks every frame: +x runs
     // along the forearm, +z is the outward face of the watch. Handing the model
     // a full basis instead of two screen-space angles is what lets a
@@ -362,7 +383,7 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
         56,
       );
       ctx.fillText(
-        `standoff: ${Math.round(pose.armR)}px   wrist: ${Math.round(pose.wristPx)}px   depth: ${Math.round(cam.far)}px`,
+        `standoff: ${Math.round(pose.armR)}px   wrist: ${Math.round(pose.wristPx)}px   depth: ${Math.round(cam.far)}px   roll: ${pose.metric3d ? `${roll.deg.toFixed(0)}deg (3D)` : 'n/a (pinned)'}`,
         14,
         72,
       );
@@ -472,6 +493,57 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
             vZ.normalize();
             pose.dir.copy(vX);
             pose.normal.copy(vZ);
+            pose.metric3d = false;
+
+            // Prefer the metric reconstruction for the orientation. The frame
+            // is a real right handed orthonormal basis, so the angle of the palm
+            // normal around the forearm is a signed angle over the full circle,
+            // which is exactly what the image landmarks could not supply: their
+            // cross product only recovers sin(theta), the same value for an
+            // equal roll either way. Position still comes from the 2D landmarks
+            // above, which track accurately.
+            const wl = results.multiHandWorldLandmarks?.[0];
+            if (wl && wl.length >= 14) {
+              // Metric hand space is x right, y down and z away from the lens,
+              // while the scene is y up and z toward it, so y and z flip. Only
+              // directions matter here, the metre scale is irrelevant.
+              const wx = (i: number) => wl[i].x;
+              const wy = (i: number) => -wl[i].y;
+              const wz = (i: number) => -wl[i].z;
+              wArm.set(wx(9) - wx(0), wy(9) - wy(0), wz(9) - wz(0));
+              // Index knuckle to ring knuckle, across the palm.
+              wAcross.set(wx(13) - wx(5), wy(13) - wy(5), wz(13) - wz(5));
+              if (wArm.lengthSq() > 1e-8 && wAcross.lengthSq() > 1e-8) {
+                wArm.normalize();
+                wAcross.normalize();
+                wNormal.crossVectors(wArm, wAcross);
+                if (wNormal.lengthSq() > 1e-8) {
+                  wNormal.normalize();
+                  if (!roll.decided) {
+                    roll.decided = true;
+                    // Keep whichever side of the wrist faced the lens at the
+                    // moment tracking engaged, so the watch does not jump to
+                    // the other side of the arm.
+                    roll.sign = wNormal.dot(CAM_DIR) >= 0 ? 1 : -1;
+                    roll.ref.copy(wNormal);
+                    roll.refCross.crossVectors(wArm, wNormal).normalize();
+                  }
+                  wNormal.multiplyScalar(roll.sign);
+                  // Re-orthogonalise so the basis stays exactly orthonormal
+                  // after the sign flip and after any landmark noise.
+                  wAcross.crossVectors(wNormal, wArm);
+                  if (wAcross.lengthSq() > 1e-8) {
+                    wAcross.normalize();
+                    wNormal.crossVectors(wArm, wAcross).normalize();
+                    pose.dir.copy(wArm);
+                    pose.normal.copy(wNormal);
+                    pose.metric3d = true;
+                    roll.deg =
+                      (Math.atan2(wNormal.dot(roll.refCross), wNormal.dot(roll.ref)) * 180) / Math.PI;
+                  }
+                }
+              }
+            }
             pose.axis.set(pose.x, -pose.y, -0.5);
             pose.armR = ARM_RADIUS_TUNABLE * wristPx;
             pose.far = vZ.z < 0;
@@ -608,31 +680,47 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
             armDir.lerp(pose.dir, 0.45).normalize();
             wristNormal.lerp(pose.normal, 0.45).normalize();
 
-            // The radial direction on the camera side of the wrist: the camera
-            // axis with anything along the forearm removed. This is where the
-            // watch lives, which is why it stays put and stays visible no matter
-            // how far you turn your hand.
-            faceDir.copy(CAM_DIR).addScaledVector(armDir, -CAM_DIR.dot(armDir));
-            if (faceDir.lengthSq() < 1e-8) {
+            if (pose.metric3d) {
+              // Real wrist rotation. The palm normal is the direction the dial
+              // should point, taken straight from the metric hand, so the watch
+              // rolls with the wrist and shows its back once the hand turns over.
+              //
+              // The model's dial faces along its own local X, measured from the
+              // GLB, so X takes the palm normal. Mapping it to any other axis
+              // is what left the watch sitting a quarter turn out. With +y along
+              // the forearm the frame is right handed by construction, since
+              // palmNormal x armAxis = across.
+              across.copy(wristNormal).cross(armDir);
+              if (across.lengthSq() < 1e-8) {
+                across.set(-armDir.y, armDir.x, 0);
+              }
+              across.normalize();
               faceDir.copy(wristNormal);
+              // Re-orthogonalise so the dial stays square to the forearm.
+              faceDir.addScaledVector(armDir, -faceDir.dot(armDir));
+              if (faceDir.lengthSq() < 1e-8) {
+                faceDir.copy(CAM_DIR);
+              }
+              faceDir.normalize();
+              poseBasis.makeBasis(faceDir, armDir, across);
+            } else {
+              // No metric hand this frame, so hold the dial to the lens rather
+              // than guessing a twist out of the 2D landmarks. Keeps the watch
+              // usable if a build of the tracker omits the reconstruction.
+              faceDir.copy(CAM_DIR).addScaledVector(armDir, -CAM_DIR.dot(armDir));
+              if (faceDir.lengthSq() < 1e-8) {
+                faceDir.copy(wristNormal);
+              }
+              faceDir.normalize();
+              faceDir.multiplyScalar(1).addScaledVector(wristNormal, FACE_TIGHTNESS_TUNABLE);
+              if (faceDir.lengthSq() < 1e-8) {
+                faceDir.copy(CAM_DIR);
+              }
+              faceDir.normalize();
+              across.crossVectors(armDir, faceDir).normalize();
+              faceDir.crossVectors(across, armDir).normalize();
+              poseBasis.makeBasis(across, armDir, faceDir);
             }
-            faceDir.normalize();
-
-            // Blend the true wrist twist with the camera-facing direction. Both
-            // are perpendicular to the forearm, so any weighted sum of them is
-            // too, and the basis stays orthonormal while the watch can never
-            // rotate past the lens. At 0 the dial is locked to the camera and
-            // ignores your twist; at 1 it is fully physical and would roll out
-            // of sight behind your arm.
-            faceDir.multiplyScalar(1).addScaledVector(wristNormal, FACE_TIGHTNESS_TUNABLE);
-            if (faceDir.lengthSq() < 1e-8) {
-              faceDir.copy(CAM_DIR);
-            }
-            faceDir.normalize();
-
-            across.crossVectors(armDir, faceDir).normalize();
-            faceDir.crossVectors(across, armDir).normalize();
-            poseBasis.makeBasis(across, armDir, faceDir);
             watchGroup.quaternion.slerp(watchQuat.setFromRotationMatrix(poseBasis), 0.35);
 
             // Seated on the skin on the side the lens can see.
