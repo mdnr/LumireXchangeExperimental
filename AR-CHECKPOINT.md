@@ -8,9 +8,11 @@ Live site: https://mdnr.alwaysdata.net
 
 - Branch `master`, no remote (deploy is manual, see below).
 - Working tree is clean apart from this notes file, which is untracked.
-- Deployed: `fc564fa` as `ProductARScan-B4dMx8l7.js`.
-- **The dial now faces the camera, confirmed by the user on a real device**, with
-  the back of the hand to the lens. That was the last blocking bug.
+- Deployed: `90d69f6` as `ProductARScan-DMpgw0W8.js`.
+- **Dial faces the camera, confirmed by the user on a real device**, back of
+  hand to the lens.
+- **Rotation direction confirmed correct on the rear camera.** It only looked
+  inverted on the selfie preview, which is mirrored. Do not "fix" this.
 
 To return to the earlier checkpoint:
 
@@ -84,36 +86,42 @@ like the dial normal, but reading the model's axes off the live render with
 along Z on screen, and a -90 degree turn about the forearm sends Z to -X, which
 is away from the lens, exactly as the user reported at forearm 270.
 
-Resolved arrangement, all three now measured rather than assumed:
+Resolved arrangement, all three now measured on device rather than assumed:
 
 ```
 local Z (dial)  ->  palm normal, at the camera
-local Y (band)  ->  along the forearm
-local X         ->  across the wrist
+local X         ->  along the forearm
+local Y         ->  around the wrist circumference
 ```
 
-The band shares the dial's axis because it encircles the wrist, which is what
-leaves the forearm on Y.
+**The dial and the band had to be measured separately, and the first attempt got
+the band wrong.** The dial sits in the plane of the two candidate axes, so
+finding it does not tell you which of the remaining axes is the forearm: the band
+and the forearm compete, and the bounding box cannot separate them because those
+two extents differ by under 1%. Reading "the band shares the dial's axis, so the
+forearm must be Y" was inference wearing a measurement's clothes, and it put the
+band on crossways. The forearm is local **X**.
 
-This is the same column order the old **fallback** branch already used
-(`makeBasis(across, armDir, faceDir)`), which is why that fallback sat
-plausibly on the wrist: its axes were right and only its normal was poor.
+Right handedness is not automatic after a column swap. The middle column has to
+be `palmNormal x armDir`; the naive swap of the previous pair yields determinant
+**-1**, a mirror, and the quaternion drifts. Verified numerically: determinant
++1, `x cross y == z`, dial at camera-space z 0.92, forearm at z 0.05.
 
-- Which band axis runs up the forearm was never determinable from geometry, and
-  is now settled by the arrangement above.
 - No node rotations or scales were missed: 76 of 78 nodes use TRS, but all have
   identity rotation and unit scale, so the bbox is unaffected either way.
 
 **The basis must stay right handed.** An earlier attempt used
-`faceDir x armDir` and produced determinant **-1**, a mirror rather than a
-rotation, and the quaternion derived from it drifted. With the current column
-order the third column is recovered as `across x armDir`, so the determinant
-stays +1.
+`faceDir x armDir` and produced determinant **-1**, the same mirror, and the
+quaternion derived from it drifted.
 
 **Front camera mirroring is already correct.** `toScreen` mirrors the landmark
 x-coordinate when the selfie camera is active, and the video element gets the
 same treatment, so overlay and feed agree. Both cameras show the same dial
 offset, which confirms mirroring is not the cause.
+
+**A watch is rigidly attached to the wrist, so it must travel the same way as the
+hand, never the opposite way.** The user twice reported "it should be inverted".
+It should not. Direction is judged on the rear camera only.
 
 ## Resolved: the dial faced left instead of at the camera
 
@@ -130,20 +138,30 @@ The two failures that pointed at the cause, worth keeping:
 
 ## Still open
 
-- **Band direction.** Not yet confirmed on device. Should follow from the
-  arrangement above, with local Y on the forearm, but the user has not stated it
-  yet.
-- **Residual tilt.** The user noted the dial sits "slightly tilted up". Left
-  deliberately alone, since it is a small angle between the dial axis and the
-  palm normal and the frame needed confirming first. If it persists, fix it as
-  a small constant angle, not another quarter turn.
+- **Residual tilt.** The dial reads on local Z but leans back a little, and the
+  model was authored with the case tipped up off the band. This is a real
+  constant angle, not a mapping error, so quarter turns cannot express it and
+  snapping to 90 degree steps left the watch visibly crooked. A `?ar-tilt=` trim
+  in whole degrees now exists for it, defaulting to 0, with an on-screen row at
+  -10/-5/0/+5/+10/+15. **The correct value is not yet known.** It is the next
+  thing to trim on device.
 - **Position.** `armR` standoff pushes the watch out along the palm normal, and
   that normal carries a leftward component (measured `palmN -0.38 -0.05 0.93`),
   which puts the watch left of the wrist centre. Exaggerated when the wrist fills
-  the frame. `?ar-arm` (default `0.45`) trims it.
-- **Sense of the roll.** If the watch rotates but feels backwards, that is a sign
-  convention, one character to fix. Judge on the **rear** camera: the selfie
-  preview is mirrored, so inverted spin there is expected and not a bug.
+  the frame. `?ar-arm` (default `0.45`) trims it. Not yet adjusted.
+
+## Method, for the next axis problem
+
+1. Do not infer an axis from a bounding box. The thinnest axis of a watch is not
+   the axis its face looks out of; that mistake cost two rounds here.
+2. `?ar-axes` draws the model's own labelled axes on the watch. Read the dial
+   axis off it.
+3. **That reading is not sufficient on its own.** The dial axis leaves two axes
+   ambiguous in its own plane. Measure the band separately, as the user did.
+4. After any column change, re-verify `det == +1` numerically. A silent mirror
+   looks like drift, not like an error.
+5. Quarter turns only for mapping errors. Real authored angles need a real
+   angle.
 
 ## Not yet verified on a real device
 
@@ -157,13 +175,14 @@ The two failures that pointed at the cause, worth keeping:
 | --- | --- |
 | `?ar-debug` | landmark overlay plus a readout of standoff, wrist, facing, forearm and roll |
 | `?ar-axes` | draws the model's own X, Y and Z axes on the watch. **This is how the dial axis was measured.** Use it rather than tuning a mapping |
-| `?ar-spin=0\|90\|180\|270` | quarter turn about the forearm axis. Defaults to 0, which is correct |
+| `?ar-spin=0\|90\|180\|270` | quarter turn about the dial normal. Defaults to 0, which is correct |
 | `?ar-facing=0\|90\|180\|270` | quarter turn about the remaining axis. Defaults to 0, which is correct |
+| `?ar-tilt=-30..30` | free-angle trim for the case leaning back off the band. Defaults to 0. **The right value is still unknown** |
 | `?ar-arm=0.45` | standoff from the wrist, as a fraction of wrist width |
 
-Both `ar-spin` and `ar-facing` also have on-screen button rows in the AR
-overlay, which is far easier than editing a URL on a phone. Both sit at zero and
-should stay there; they are trims, not the fix.
+`ar-spin`, `ar-facing` and `ar-tilt` all have on-screen button rows in the AR
+overlay, which is far easier than editing a URL on a phone. The two quarter
+turns sit at zero and should stay there; they are trims, not the fix.
 
 ## Deploy
 
@@ -187,7 +206,8 @@ remotely uploaded `wwwroot/images/`. The database backup is at
 | `1252322` | `ProductARScan-Dvlm0uiS.js` | pinned to camera, no rotation. Dull but not wrong. |
 | `2e6c2c2` | `ProductARScan-B2exgz03.js` | metric 3D roll plus on-screen spin control. |
 | `a8e96b1` | `ProductARScan-DV2W4q9h.js` | adds the `?ar-axes` probe that found the dial axis. |
-| `fc564fa` | `ProductARScan-B4dMx8l7.js` | **dial faces the camera. Current, and confirmed on device.** |
+| `fc564fa` | `ProductARScan-B4dMx8l7.js` | dial faces the camera. Facing fixed, band still crossways. |
+| `90d69f6` | `ProductARScan-DMpgw0W8.js` | **forearm on local X, band along the arm. Adds the tilt trim. Current.** |
 
 ## Credentials
 
