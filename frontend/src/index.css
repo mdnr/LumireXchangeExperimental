@@ -2205,6 +2205,21 @@ textarea {
   gap: 10px;
 }
 
+.align-quick-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.align-quick-row .btn {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 0.85rem;
+  padding: 8px 10px;
+}
+
+
 .align-slider {
   display: block;
   margin-top: 10px;
