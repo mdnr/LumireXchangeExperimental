@@ -6,13 +6,13 @@ import { formatPrice } from '../lib/format';
 import { useArSupport } from '../lib/useArSupport';
 import type { Product, ProductSummary } from '../lib/types';
 
-function isMobile(): boolean {
-  return /iPhone|iPad|iPod|Android|Mobile|Tablet/i.test(navigator.userAgent) || navigator.maxTouchPoints > 1;
-}
-
 function usdzUrlFor(modelUrl: string): string {
   return modelUrl.replace(/\.glb(\?.*)?$/i, '.usdz');
 }
+
+// iOS Quick Look ignores a rel="ar" anchor unless it contains an <img> child.
+const USDZ_POSTER =
+  'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 
 const ProductViewer = lazy(() =>
   import('../components/ProductViewer').then((m) => ({ default: m.ProductViewer })),
@@ -36,7 +36,15 @@ export function ProductDetailPage() {
   const [view, setView] = useState<'3d' | 'photo'>('photo');
   const [activeVariant, setActiveVariant] = useState<number | null>(null);
   const [arOpen, setArOpen] = useState<'webxr' | 'scan' | null>(null);
-  const [arSupported] = useArSupport();
+  const [arSupported, arChecking] = useArSupport();
+  // The MediaPipe wrist scan only needs a camera, so it is not a mobile-only
+  // feature. Gating it behind a touch/user-agent check hid the button entirely
+  // on desktops, where a webcam runs the same hand tracking just fine.
+  const [hasCamera, setHasCamera] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    setHasCamera(typeof navigator.mediaDevices?.getUserMedia === 'function');
+  }, []);
 
   useEffect(() => {
     if (!slug) return;
@@ -70,6 +78,22 @@ export function ProductDetailPage() {
   }
 
   const isWearable = /watch|wearable/i.test(`${product.category} ${product.slug}`);
+  // Prefer WebXR where the browser exposes it, fall back to the camera scan, and
+  // only offer the static USDZ link when the device can do neither.
+  const arReady = !arChecking && hasCamera !== null;
+  const arCanOpen = arSupported || hasCamera === true;
+
+  // iOS only releases the camera from inside a user gesture, and the scan
+  // component acquires its stream from a mount effect, by which point the click
+  // that opened it is no longer "active" and the prompt is refused. Ask once
+  // here, then release the tracks, so the real request later is already allowed.
+  const openScan = () => {
+    void navigator.mediaDevices
+      ?.getUserMedia({ video: true })
+      .then((warmed) => warmed.getTracks().forEach((t) => t.stop()))
+      .catch(() => undefined);
+    setArOpen('scan');
+  };
   const activeVariantData = product.variants.find((v) => v.id === activeVariant) ?? null;
   const arMaterial = activeVariantData?.material ?? product.material;
   const arModelMaterials = activeVariantData?.modelMaterials ?? product.modelMaterials;
@@ -193,23 +217,24 @@ export function ProductDetailPage() {
             Add to cart
           </button>
 
-          {product.modelUrl && isWearable && arSupported && (
+          {product.modelUrl && isWearable && arReady && arCanOpen && (
             <button
               type="button"
               className="btn btn-secondary btn-lg btn-block"
-              onClick={() => setArOpen('webxr')}
+              onClick={() => (arSupported ? setArOpen('webxr') : openScan())}
             >
               Try it on your wrist (AR)
             </button>
           )}
-          {product.modelUrl && isWearable && !arSupported && isMobile() && (
-            <button
-              type="button"
-              className="btn btn-secondary btn-lg btn-block"
-              onClick={() => setArOpen('scan')}
+          {product.modelUrl && isWearable && arReady && !arCanOpen && (
+            <a
+              className="btn btn-secondary btn-lg btn-block ar-usdz-link"
+              href={usdzUrlFor(product.modelUrl)}
+              rel="ar"
             >
-              Try it on your wrist (AR)
-            </button>
+              <img src={USDZ_POSTER} alt="" aria-hidden="true" />
+              View this watch in AR
+            </a>
           )}
           <p className="muted small">Demo marketplace — no checkout is wired up yet.</p>
 

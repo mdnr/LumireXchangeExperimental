@@ -392,7 +392,8 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
           });
         } catch {
           if (useFacing === 'user') throw new Error('front-camera-unavailable');
-          stream = await navigator.mediaDevices.getUserMedia();
+          // Some devices only honour a bare video request for the rear camera.
+          stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
         }
         if (disposed) {
           stream.getTracks().forEach((t) => t.stop());
