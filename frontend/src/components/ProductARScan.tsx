@@ -20,12 +20,21 @@ const HOLD_MS = 350;
 const TRACK_MS = 110;
 const MEDIAPIPE_BASE = `${import.meta.env.BASE_URL}mediapipe/`;
 const DEBUG = new URLSearchParams(window.location.search).has('ar-debug');
+// Which side of the wrist the watch sits on. Normally detected on the first
+// confident frame (assumed wrist-side-up, the way you would hold your arm out
+// to try a watch on). Override with ?ar-side=front if your first frame is
+// palm-forward, or if the watch ends up rendering back-to-front.
+const AR_SIDE = new URLSearchParams(window.location.search).get('ar-side');
 const USDZ_POSTER =
   'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 
 interface LandmarkPoint {
   x: number;
   y: number;
+  // MediaPipe reports depth in the same scale as x, smaller = nearer the
+  // camera. Dropping it is what made a palm-to-back flip untrackable: without
+  // depth there is no way to tell which side of the wrist you are looking at.
+  z: number;
 }
 interface ScanResults {
   multiHandLandmarks: Array<Array<LandmarkPoint>>;
@@ -208,17 +217,30 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
     let mirrorCurrent = true;
 
     const model = { cached: false, maxDim: 1, sceneObj: null as THREE.Group | null };
-    const pose = { visible: false, x: 0, y: 0, wristPx: 0, arm: 0, roll: 0 };
-    const rotAuto = { y: 0, z: 0 };
-    const clampPi = (a: number) => {
-      while (a > Math.PI) a -= Math.PI * 2;
-      while (a < -Math.PI) a += Math.PI * 2;
-      return a;
+    const pose = {
+      visible: false,
+      x: 0,
+      y: 0,
+      wristPx: 0,
+      // True when the watch face points away from the lens, which means the
+      // forearm sits between the camera and the watch and it must not be drawn.
+      far: false,
+      quat: new THREE.Quaternion(),
     };
-    const clampTo = (v: number, m: number, dead = 0) => {
-      const a = Math.abs(v) <= dead ? 0 : v;
-      return Math.max(-m, Math.min(m, a));
-    };
+    // The wrist frame is rebuilt from the 3D landmarks every frame: +x runs
+    // along the forearm, +z is the outward face of the watch. Handing the model
+    // a full basis instead of two screen-space angles is what lets a
+    // palm-to-back flip swing the watch right around the arm.
+    const basis = new THREE.Matrix4();
+    const vUp = new THREE.Vector3();
+    const vRad = new THREE.Vector3();
+    const vOut = new THREE.Vector3();
+    const vX = new THREE.Vector3();
+    const vY = new THREE.Vector3();
+    const vZ = new THREE.Vector3();
+    const side = { sign: AR_SIDE === 'front' ? -1 : 1, decided: !!AR_SIDE, palm: 0 };
+    const occ = { v: 0 };
+    const watchMats: THREE.MeshStandardMaterial[] = [];
     let cameraReady = false;
     let engineReady = false;
     let tracking = false;
@@ -293,16 +315,21 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
       const age = diag.lastMs ? Math.round(performance.now() - diag.lastMs) : -1;
       ctx.font = '12px system-ui, -apple-system, sans-serif';
       ctx.fillStyle = 'rgba(10, 10, 20, 0.6)';
-      ctx.fillRect(8, 8, 280, 58);
+      ctx.fillRect(8, 8, 330, 80);
       ctx.fillStyle = '#4dd0e1';
       ctx.fillText(`engine: ${diag.state}   video: ${d.vw}x${d.vh}`, 14, 24);
       ctx.fillText(`hands: ${diag.hands}   wrist: ${Math.round(diag.wristPx)}px   gl: ${glFrames}fr`, 14, 40);
+      ctx.fillText(
+        `palm: ${side.palm > 0 ? 'at camera' : 'away'}   watch: ${pose.far ? 'occluded' : 'facing'}   side: ${side.sign > 0 ? 'dorsal' : 'palmar'}${AR_SIDE ? ' forced' : ''}`,
+        14,
+        56,
+      );
       ctx.fillText(
         diag.err
           ? `err: ${diag.err.slice(0, 42)}`
           : `last result: ${age >= 0 ? `${age}ms ago` : 'never'}   send time: ${diag.sendMs}ms`,
         14,
-        56,
+        72,
       );
     };
 
@@ -355,9 +382,54 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
             pose.x = p0.x + (dx / len) * offset;
             pose.y = p0.y + (dy / len) * offset;
             pose.wristPx = wristPx;
-            pose.arm = Math.atan2(p0.y - p9.y, p0.x - p9.x);
-            const wristAxis = Math.atan2(p5.y - p0.y, p5.x - p0.x);
-            pose.roll = clampPi(wristAxis - (pose.arm + Math.PI / 2));
+
+            // Landmarks arrive with x scaled by image width and y by image
+            // height, so x is multiplied by the aspect ratio to put all three
+            // axes into the single unit MediaPipe uses for z.
+            const d = getDims();
+            const aspect = Math.max(d.vw, 1) / Math.max(d.vh, 1);
+            const lx = (i: number) => lmOut[i].x * aspect;
+            const ly = (i: number) => lmOut[i].y;
+            const lz = (i: number) => {
+              const z = lmOut[i].z;
+              // If a build of the tracker ever omits depth, fall back to zero so
+              // the watch stays on the wrist instead of vanishing on a NaN.
+              return typeof z === 'number' && Number.isFinite(z) ? z : 0;
+            };
+
+            // Landmark depth grows away from the lens while the ortho scene's
+            // depth grows toward it, so the frame is built in scene space and
+            // the z axis is negated once, here.
+            vUp.set(lx(9) - lx(0), ly(9) - ly(0), -(lz(9) - lz(0)));
+            vRad.set(lx(5) - lx(17), ly(5) - ly(17), -(lz(5) - lz(17)));
+            vOut.crossVectors(vUp, vRad);
+            if (vOut.lengthSq() < 1e-8) {
+              lost();
+              return;
+            }
+            vOut.normalize();
+            side.palm = vOut.z;
+
+            // Decide once which side of the wrist the watch sits on, assuming
+            // it is the side facing the lens when tracking first locks. Deciding
+            // once and then following the frame continuously avoids re-deriving
+            // the sign every frame, which would make the watch spin.
+            if (!side.decided) {
+              side.decided = true;
+              side.sign = vOut.z > 0 ? 1 : -1;
+            }
+
+            vX.copy(vUp).normalize();
+            vZ.copy(vOut).multiplyScalar(side.sign).projectOnPlane(vX);
+            if (vZ.lengthSq() < 1e-8) {
+              lost();
+              return;
+            }
+            vZ.normalize();
+            vY.crossVectors(vZ, vX).normalize();
+            basis.makeBasis(vX, vY, vZ);
+            pose.quat.setFromRotationMatrix(basis);
+            pose.far = vZ.z < 0;
             pose.visible = true;
             holdUntil = performance.now() + HOLD_MS;
             setStatus('worn');
@@ -440,6 +512,14 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
         fresh.position.set(-center.x, -center.y, -center.z);
         fresh.quaternion.identity();
         stripScanTextures(fresh);
+        // Kept so the watch can be faded out when the forearm occludes it.
+        watchMats.length = 0;
+        fresh.traverse((obj) => {
+          const mesh = obj as THREE.Mesh;
+          if (!mesh.isMesh) return;
+          const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+          for (const m of mats) watchMats.push(m as THREE.MeshStandardMaterial);
+        });
         model.sceneObj = fresh;
         watchGroup.add(fresh);
         model.cached = true;
@@ -488,13 +568,20 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
           if (pose.visible) {
             watchGroup.position.x += (pose.x - watchGroup.position.x) * 0.45;
             watchGroup.position.y += (-pose.y - watchGroup.position.y) * 0.45;
-            const zTarget = -pose.arm;
-            const yTarget = -clampTo(pose.roll, 0.4, 0.2);
-            rotAuto.z += (zTarget - rotAuto.z) * 0.4;
-            rotAuto.y += (yTarget - rotAuto.y) * 0.4;
-            watchGroup.rotation.x = 0;
-            watchGroup.rotation.y = rotAuto.y;
-            watchGroup.rotation.z = rotAuto.z;
+            watchGroup.quaternion.slerp(pose.quat, 0.35);
+            // Fade the watch out instead of letting it draw straight over the
+            // forearm once it has rolled to the far side of the wrist. A soft
+            // fade reads as the arm passing in front of it, where a hard cut
+            // would look like a bug.
+            const occTarget = pose.far ? 1 : 0;
+            occ.v += (occTarget - occ.v) * 0.2;
+            const alpha = 1 - occ.v * 0.94;
+            for (const m of watchMats) {
+              m.opacity = alpha;
+              m.transparent = alpha < 0.98;
+              m.depthWrite = alpha > 0.5;
+            }
+            watchGroup.visible = alpha > 0.05;
             const pxPerModelWidth = (WATCH_WIDTH_FACTOR * pose.wristPx) / model.maxDim;
             watchGroup.scale.setScalar(pxPerModelWidth);
             const depth = Math.max(1e-6, model.maxDim * pxPerModelWidth);
