@@ -408,9 +408,14 @@ const [faceDeg, setFaceDeg] = useState(FACE_DEG);
         56,
       );
       ctx.fillText(
-        `standoff: ${Math.round(pose.armR)}px   wrist: ${Math.round(pose.wristPx)}px   depth: ${Math.round(cam.far)}px   facing: ${faceState.deg}deg   spin: ${spinState.deg}deg   roll: ${pose.metric3d ? `${roll.deg.toFixed(0)}deg (3D)` : 'n/a (pinned)'}`,
+        `standoff: ${Math.round(pose.armR)}px   wrist: ${Math.round(pose.wristPx)}px   depth: ${Math.round(cam.far)}px   roll: ${pose.metric3d ? `${roll.deg.toFixed(0)}deg (3D)` : 'n/a (pinned)'}`,
         14,
         72,
+      );
+      ctx.fillText(
+        `palmN: ${wristNormal.x.toFixed(2)}, ${wristNormal.y.toFixed(2)}, ${wristNormal.z.toFixed(2)}   armD: ${armDir.x.toFixed(2)}, ${armDir.y.toFixed(2)}, ${armDir.z.toFixed(2)}   facing: ${faceState.deg}  spin: ${spinState.deg}`,
+        14,
+        88,
       );
       ctx.fillText(
         diag.err
