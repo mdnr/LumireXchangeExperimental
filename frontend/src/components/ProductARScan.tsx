@@ -50,12 +50,22 @@ const SPIN_DEG = ((((numParam('ar-spin', 0) % 360) + 360) % 360) / 90) * 90;
 // A second quarter turn, about the model's third axis, for the remaining degree
 // of freedom once the facing and forearm turns are set.
 const FACE_DEG = ((((numParam('ar-facing', 0) % 360) + 360) % 360) / 90) * 90;
+// The residual tilt, in whole degrees rather than quarter turns, because this
+// one is not a mapping error. The dial reads on local Z but leans back a little,
+// so the model was authored with the case tipped up off the band. A quarter turn
+// cannot express that, and snapping to 90 degree steps left the watch visibly
+// crooked, so this is a free angle about the forearm and trims it flat.
+const TILT_DEG = Math.round(Math.max(-30, Math.min(30, numParam('ar-tilt', 0))));
 // Mutable so the on screen controls can retune the watch live, without a reload.
 const spinState = { deg: SPIN_DEG, quat: new THREE.Quaternion() };
-// Local Y, which the basis maps to the forearm.
+// Local Y, which is the dial's own normal once the basis below is applied.
 spinState.quat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), (SPIN_DEG * Math.PI) / 180);
 const faceState = { deg: FACE_DEG, quat: new THREE.Quaternion() };
 faceState.quat.setFromAxisAngle(new THREE.Vector3(0, 0, 1), (FACE_DEG * Math.PI) / 180);
+const tiltState = { deg: TILT_DEG, quat: new THREE.Quaternion() };
+// Local X, which the basis maps to the forearm, so this leans the dial off the
+// band without moving it around the wrist.
+tiltState.quat.setFromAxisAngle(new THREE.Vector3(1, 0, 0), (TILT_DEG * Math.PI) / 180);
 // 0 is allowed here, unlike the radius, because 0 is a meaningful tightness.
 const FACE_TIGHTNESS_TUNABLE = (() => {
   const raw = Number.parseFloat(PARAMS.get('ar-face') ?? '');
@@ -211,7 +221,8 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
   const [photo, setPhoto] = useState<string | null>(null);
 // Starts from the URL so a shared link still wins, then the buttons take over.
 const [spinDeg, setSpinDeg] = useState(SPIN_DEG);
-const [faceDeg, setFaceDeg] = useState(FACE_DEG);
+  const [faceDeg, setFaceDeg] = useState(FACE_DEG);
+  const [tiltDeg, setTiltDeg] = useState(TILT_DEG);
 
   useEffect(() => {
     let disposed = false;
@@ -457,7 +468,7 @@ const [faceDeg, setFaceDeg] = useState(FACE_DEG);
         }`,
         `palmN  ${wristNormal.x.toFixed(2)}  ${wristNormal.y.toFixed(2)}  ${wristNormal.z.toFixed(2)}`,
         `armD   ${armDir.x.toFixed(2)}  ${armDir.y.toFixed(2)}  ${armDir.z.toFixed(2)}`,
-        `facing ${faceState.deg}   forearm ${spinState.deg}   armR ${Math.round(pose.armR)}px`,
+        `facing ${faceState.deg}   forearm ${spinState.deg}   tilt ${tiltState.deg}   armR ${Math.round(pose.armR)}px`,
         ...(AXES ? ['probe: X red  Y green  Z blue'] : []),
         diag.err ? `ERR ${diag.err.slice(0, 40)}` : `result ${age >= 0 ? `${age}ms` : 'never'}   send ${diag.sendMs}ms`,
       ];
@@ -773,15 +784,21 @@ const [faceDeg, setFaceDeg] = useState(FACE_DEG);
               // model's own axes off the screen with ?ar-axes puts the dial on
               // local Z, not on local X as the bounding box suggested, since the
               // thinnest axis of a watch is not the one its face looks out of.
-              // The band encircles the wrist, so its loop shares the dial's axis,
-              // which leaves the forearm on local Y. Hence Z takes the palm
-              // normal, Y runs up the arm, and X is left across the wrist.
+              // The band then had to be measured separately, and it came back
+              // crossways, which put the forearm on local X rather than Y. So:
+              // Z takes the palm normal, X runs up the arm, and Y is left around
+              // the wrist circumference.
               //
-              // This is the same column order the fallback branch below already
-              // used, which is why that one sat plausibly on the wrist: it had
-              // the axes right and only a poor normal. With the columns in this
-              // order the frame stays right handed, because across x armDir
-              // returns faceDir for the third column.
+              // Only the dial could be read off one probe reading, and it was not
+              // enough on its own: the band and the forearm compete for the two
+              // axes in the dial's plane, and a bounding box cannot separate
+              // them because they differ by under 1%. Both were confirmed on
+              // device before being written in here.
+              //
+              // Right handed by construction: the third column has to satisfy
+              // x cross y = z, so the middle column is the palm normal crossed
+              // with the arm rather than the other way round, which would give
+              // determinant -1, a mirror, and make the derived quaternion drift.
               faceDir.copy(wristNormal);
               // Re-orthogonalise so the dial stays square to the forearm.
               faceDir.addScaledVector(armDir, -faceDir.dot(armDir));
@@ -789,13 +806,12 @@ const [faceDeg, setFaceDeg] = useState(FACE_DEG);
                 faceDir.copy(CAM_DIR);
               }
               faceDir.normalize();
-              across.crossVectors(armDir, faceDir);
+              across.crossVectors(faceDir, armDir);
               if (across.lengthSq() < 1e-8) {
                 across.set(-armDir.y, armDir.x, 0);
               }
               across.normalize();
-              faceDir.crossVectors(across, armDir).normalize();
-              poseBasis.makeBasis(across, armDir, faceDir);
+              poseBasis.makeBasis(armDir, across, faceDir);
             } else {
               // No metric hand this frame, so hold the dial to the lens rather
               // than guessing a twist out of the 2D landmarks. Keeps the watch
@@ -815,8 +831,10 @@ const [faceDeg, setFaceDeg] = useState(FACE_DEG);
               poseBasis.makeBasis(across, armDir, faceDir);
             }
             watchQuat.setFromRotationMatrix(poseBasis);
-            // Applied last, in the model's own frame. The facing turn swings the
-            // dial round to the lens, the spin then rolls it in plane.
+            // Applied last, in the model's own frame. The tilt leans the dial off
+            // the band, the facing turn swings it round to the lens, and the
+            // forearm turn then rolls it in plane.
+            if (tiltState.deg) watchQuat.multiply(tiltState.quat);
             if (faceState.deg) watchQuat.multiply(faceState.quat);
             if (spinState.deg) watchQuat.multiply(spinState.quat);
             watchGroup.quaternion.slerp(watchQuat, 0.35);
@@ -969,6 +987,24 @@ const [faceDeg, setFaceDeg] = useState(FACE_DEG);
                   }}
                 >
                   {deg}°
+                </button>
+              ))}
+            </div>
+            <div className="ar-spin-row" role="group" aria-label="Watch tilt">
+              <span className="ar-spin-label">Tilt</span>
+              {[-10, -5, 0, 5, 10, 15].map((deg) => (
+                <button
+                  key={deg}
+                  type="button"
+                  className={`ar-spin-btn${tiltDeg === deg ? ' is-active' : ''}`}
+                  aria-pressed={tiltDeg === deg}
+                  onClick={() => {
+                    tiltState.deg = deg;
+                    tiltState.quat.setFromAxisAngle(new THREE.Vector3(1, 0, 0), (deg * Math.PI) / 180);
+                    setTiltDeg(deg);
+                  }}
+                >
+                  {deg > 0 ? `+${deg}` : deg}°
                 </button>
               ))}
             </div>
