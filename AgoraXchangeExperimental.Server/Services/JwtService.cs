@@ -10,7 +10,12 @@ public class JwtOptions
 {
     public string Issuer { get; set; } = "agora";
     public string Audience { get; set; } = "agora-frontend";
-    public string Key { get; set; } = "dev-only-please-override-me-with-a-real-secret";
+
+    /// <summary>
+    /// No default on purpose: development gets one from appsettings.Development.json,
+    /// production must supply Jwt__Key or the app refuses to start.
+    /// </summary>
+    public string Key { get; set; } = string.Empty;
     public int ExpiryDays { get; set; } = 7;
 }
 

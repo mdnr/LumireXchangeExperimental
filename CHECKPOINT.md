@@ -1,8 +1,8 @@
-# AgoraXchangeExperimental — Checkpoint (2026-09-06)
+# AgoraXchangeExperimental — Checkpoint (2026-09-26)
 
 Local build of the Lumière MVP. The public showcase (`mdnr/LumireXchangeExperimental`, GitHub Pages)
 stays untouched as a static demo. This repo is where the marketplace MVP is built: backend + DB +
-auth + seller tools, ready to deploy to a free server later.
+auth + seller tools, and it is now **live** at `https://mdnr.alwaysdata.net` (see Live deployment).
 
 ## What's done
 
@@ -31,9 +31,12 @@ auth + seller tools, ready to deploy to a free server later.
     editor + 3D preview, GLB upload) + 404.
   - Router shell in `App.tsx`, `<BrowserRouter>` + `<AuthProvider>` in `main.tsx`.
   - `vite.config.ts` proxies `/api` and `/models` -> server (falls back to `http://localhost:5582`).
-- **Seed data**: 4 Lumière products + demo accounts:
-  - Seller: `seller@lumiere.app` / `Seller123!`
-  - Buyer: `buyer@lumiere.app` / `Buyer123!`
+- **Seed data**: 4 Lumière products. The demo logins are **Development-only** — outside
+  Development the catalogue belongs to a locked `catalog@lumiere.app` account (random password,
+  never shown), and the public demo logins are neither created nor left over from an older build:
+  - Seller: `seller@lumiere.app` / `Seller123!` (local only)
+  - Buyer: `buyer@lumiere.app` / `Buyer123!` (local only)
+  - On the live site, sellers self-register at `/register` and pick the **seller** role.
 - **Verified**: `dotnet build` clean; `npm run build` clean (three.js split into a lazy-loaded chunk);
   `npm run lint` clean; live smoke test: list/login/detail/create/delete work, GLB serves as
   `model/gltf-binary`, DB back to 4 products after test cleanup.
@@ -70,10 +73,26 @@ auth + seller tools, ready to deploy to a free server later.
 
 ## Next up
 
-1. Deploy tasks: swap the dev-only JWT key for a real secret, deploy server (Kestrel + sqlite file)
-   with the frontend build, or publish via Aspire containers (`server.PublishWithContainerFiles`).
-2. Optional: real checkout/cart, product search, seller analytics; swap Unsplash images for uploaded
+1. Optional: real checkout/cart, product search, seller analytics; swap Unsplash images for uploaded
    product photos.
+2. Housekeeping: raise `OpenTelemetry.Exporter.OpenTelemetryProtocol` off 1.9.0 (`NU1902` advisory),
+   and revisit the slow `/api/auth/login` on the free plan (left deliberately unchanged).
+
+## Live deployment (Alwaysdata)
+
+- **Host**: `https://mdnr.alwaysdata.net` — Alwaysdata free plan, site `[mdnr] #1078626`,
+  type `.NET`, start command `dotnet AgoraXchangeExperimental.Server.dll --urls "http://$IP:$PORT"`.
+  Working directory is left empty, so `app.db` sits in the site directory beside the app.
+- **No git remote.** Deployment is SFTP (`mdnr@ssh-mdnr.alwaysdata.net:22`), not GitHub.
+- **Upload flow**: run `deploy.ps1`, upload the *contents* of `publish/` to the site directory, then
+  press **Restart** in the admin. Restart is the last step on purpose: files upload fine under the
+  running process, but the old API stays in memory until it restarts.
+- `deploy.ps1` merges the Vite build into `Server/wwwroot` without wiping `models/` or `images/`,
+  prunes stale hashed assets, publishes, and refuses to finish if `appsettings.Production.json`
+  is missing from the output.
+- Production hardening: no demo logins, `Jwt:Key` mandatory, CORS same-origin by default
+  (dev Vite origins added automatically, extras via `Cors:AllowedOrigins`).
+- Never commit `appsettings.Production.json` or the host password.
 
 ## How to run
 
@@ -83,7 +102,9 @@ auth + seller tools, ready to deploy to a free server later.
 
 ## Notes
 
-- JWT key is a dev-only key in `appsettings.Development.json` — rotate before any real deployment.
+- JWT key: `appsettings.Development.json` holds a dev-only key. Production reads
+  `appsettings.Production.json`, which is **gitignored**, carries a real random secret, and is
+  published by `deploy.ps1`. Outside Development the app refuses to boot without `Jwt:Key`.
 - No Docker needed (SQLite). Migrations in place, so switching to another host DB later is EF-walk-in.
 - Placeholder GLBs are simple extruded shapes; drop real `.glb` files into
   `Server/wwwroot/models/{slug}.glb` (or upload via the seller studio) to replace them.

@@ -1982,10 +1982,13 @@ textarea {
   background: rgba(17, 17, 26, 0.55);
 }
 
-.ar-scan-gl canvas {
-  width: 100% !important;
-  height: 100% !important;
-  display: block;
+/* iOS Quick Look only launches AR from a rel="ar" anchor that wraps an <img>;
+   keep that poster out of the button's flex layout. */
+.ar-usdz-link img {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
   pointer-events: none;
 }
 

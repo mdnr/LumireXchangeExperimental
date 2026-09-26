@@ -19,6 +19,9 @@ const WATCH_ARM_OFFSET = 0.45;
 const HOLD_MS = 350;
 const TRACK_MS = 110;
 const MEDIAPIPE_BASE = `${import.meta.env.BASE_URL}mediapipe/`;
+const DEBUG = new URLSearchParams(window.location.search).has('ar-debug');
+const USDZ_POSTER =
+  'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 
 interface LandmarkPoint {
   x: number;
@@ -257,6 +260,7 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
       return { x: sx - d.sw / 2, y: (p.y * d.vh - d.oy) * d.cover - d.sh / 2 };
     };
     const drawDebug = (hand: LandmarkPoint[] | null) => {
+      if (!DEBUG) return;
       const c = debugRef.current;
       if (!c) return;
       const w = gl.clientWidth;
@@ -564,7 +568,7 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
         playsInline
         muted
       />
-      <canvas ref={debugRef} className="ar-scan-debug" />
+      {DEBUG && <canvas ref={debugRef} className="ar-scan-debug" />}
       <div ref={glRef} className="ar-scan-gl" />
       <div ref={ringRef} className="ar-wrist-ring" />
       <div className="ar-controls ar-controls-scan">
@@ -572,7 +576,8 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
           <div className="ar-start-panel">
             <p className="ar-error" role="alert">{error}</p>
             {usdzUrl && (
-              <a className="btn btn-ghost" href={usdzUrl} rel="ar">
+              <a className="btn btn-ghost ar-usdz-link" href={usdzUrl} rel="ar">
+                <img src={USDZ_POSTER} alt="" aria-hidden="true" />
                 No camera? Open model in AR instead
               </a>
             )}

@@ -25,11 +25,30 @@ builder.Services.AddProblemDetails();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
+// The built front-end is served from this same origin, so browsers never need a
+// cross-origin allowance — same-origin requests ignore CORS entirely. Only
+// origins that are actually separate need listing: the Vite dev server locally,
+// and anything set via Cors:AllowedOrigins (env: Cors__AllowedOrigins__0=…).
+var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
+    ?? [];
+if (builder.Environment.IsDevelopment())
+{
+    allowedOrigins =
+    [
+        .. allowedOrigins,
+        "http://localhost:5173",
+        "http://127.0.0.1:5173"
+    ];
+}
+
 builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy =>
     {
-        policy.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod();
+        if (allowedOrigins.Length > 0)
+        {
+            policy.WithOrigins(allowedOrigins).AllowAnyHeader().AllowAnyMethod();
+        }
     });
 });
 
@@ -56,6 +75,14 @@ builder.Services.AddIdentityCore<AppUser>(options =>
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection("Jwt"));
 var jwt = new JwtOptions();
 builder.Configuration.GetSection("Jwt").Bind(jwt);
+
+// Outside Development the signing key must be supplied (Jwt__Key env var on the
+// host). Refusing to boot beats silently signing tokens with the sample secret.
+if (!builder.Environment.IsDevelopment() && string.IsNullOrWhiteSpace(jwt.Key))
+{
+    throw new InvalidOperationException(
+        "Jwt:Key is not configured. Set the Jwt__Key environment variable to a long random secret.");
+}
 
 builder.Services.AddSingleton<JwtService>();
 
@@ -89,10 +116,11 @@ builder.Services.Configure<FormOptions>(options =>
 
 var app = builder.Build();
 
-// Seed database on startup
+// Seed database on startup. Demo logins stay development-only; production gets
+// the catalogue under a locked catalog account instead.
 using (var scope = app.Services.CreateScope())
 {
-    await DbSeeder.SeedAsync(scope.ServiceProvider);
+    await DbSeeder.SeedAsync(scope.ServiceProvider, app.Environment.IsDevelopment());
 }
 
 // Configure the HTTP request pipeline.

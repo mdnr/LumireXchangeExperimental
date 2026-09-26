@@ -12,6 +12,19 @@ dist/
 dist-ssr/
 *.local
 
+# Server publish output (deploy.ps1)
+publish/
+
+# Live JWT signing key. Host-specific secret, never committed. This is the file
+# `dotnet publish` ships so the host needs no Jwt__Key environment variable.
+AgoraXchangeExperimental.Server/appsettings.Production.json
+
+# Generated front-end build that deploy.ps1 merges into wwwroot.
+# models/ and images/ stay tracked: they hold the seed + uploaded product assets.
+AgoraXchangeExperimental.Server/wwwroot/*
+!AgoraXchangeExperimental.Server/wwwroot/models/
+!AgoraXchangeExperimental.Server/wwwroot/images/
+
 # IDE
 .vs/
 .vscode/*

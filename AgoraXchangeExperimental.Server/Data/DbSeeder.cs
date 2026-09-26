@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -11,7 +12,17 @@ public static class DbSeeder
     public const string DemoBuyerEmail = "buyer@lumiere.app";
     public const string DemoBuyerPassword = "Buyer123!";
 
-    public static async Task SeedAsync(IServiceProvider services)
+    // Owns the seeded catalogue outside Development. The password is random and
+    // never shown, so nobody can sign in as it — sellers register their own
+    // accounts through /api/auth/register.
+    private const string CatalogOwnerEmail = "catalog@lumiere.app";
+
+    /// <param name="includeDemoAccounts">
+    /// When false (production) the publicly documented seller@lumiere.app and
+    /// buyer@lumiere.app logins are not created, and any left behind by an
+    /// earlier deployment are removed.
+    /// </param>
+    public static async Task SeedAsync(IServiceProvider services, bool includeDemoAccounts = true)
     {
         var db = services.GetRequiredService<AppDbContext>();
         await db.Database.MigrateAsync();
@@ -27,8 +38,17 @@ public static class DbSeeder
             }
         }
 
-        var seller = await EnsureUser(userManager, DemoSellerEmail, DemoSellerPassword, "Lumière Studio", "Seller");
-        var buyer = await EnsureUser(userManager, DemoBuyerEmail, DemoBuyerPassword, "Demo Buyer", "User");
+        var seller = includeDemoAccounts
+            ? await EnsureUser(userManager, DemoSellerEmail, DemoSellerPassword, "Lumière Studio", "Seller")
+            : await EnsureUser(userManager, CatalogOwnerEmail, RandomPassword(), "Lumière Studio", "Seller");
+        if (includeDemoAccounts)
+        {
+            await EnsureUser(userManager, DemoBuyerEmail, DemoBuyerPassword, "Demo Buyer", "User");
+        }
+        else if (seller is not null)
+        {
+            await RemoveDemoAccountsAsync(db, userManager, seller.Id);
+        }
 
         if (!await db.Products.AnyAsync())
         {
@@ -432,6 +452,64 @@ public static class DbSeeder
             "#bcd0d8" or "#a7c4cf" => "Mist",
             _ => $"Colour {index + 1}",
         };
+    }
+
+    private static string RandomPassword()
+    {
+        const string upper = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+        const string lower = "abcdefghijkmnopqrstuvwxyz";
+        const string digits = "23456789";
+        const string symbols = "!@#$%^&*-_=+";
+        var all = upper + lower + digits + symbols;
+
+        // One of each class up front so the result always satisfies the Identity
+        // password rules, then shuffled so the classes aren't positionally fixed.
+        var chars = new List<char>
+        {
+            upper[RandomNumberGenerator.GetInt32(upper.Length)],
+            lower[RandomNumberGenerator.GetInt32(lower.Length)],
+            digits[RandomNumberGenerator.GetInt32(digits.Length)],
+            symbols[RandomNumberGenerator.GetInt32(symbols.Length)],
+        };
+        while (chars.Count < 32)
+        {
+            chars.Add(all[RandomNumberGenerator.GetInt32(all.Length)]);
+        }
+        for (var i = chars.Count - 1; i > 0; i--)
+        {
+            var j = RandomNumberGenerator.GetInt32(i + 1);
+            (chars[i], chars[j]) = (chars[j], chars[i]);
+        }
+
+        return new string(chars.ToArray());
+    }
+
+    // A database seeded by an earlier build still holds the public demo logins,
+    // and the demo seller owns that catalogue. Move those products to the locked
+    // catalog account first, otherwise the FK on Products.SellerId refuses the
+    // delete. Idempotent: once the accounts are gone this is a no-op.
+    private static async Task RemoveDemoAccountsAsync(AppDbContext db, UserManager<AppUser> userManager, string catalogOwnerId)
+    {
+        foreach (var email in new[] { DemoSellerEmail, DemoBuyerEmail })
+        {
+            var demo = await userManager.FindByEmailAsync(email);
+            if (demo is null)
+            {
+                continue;
+            }
+
+            var owned = await db.Products.Where(p => p.SellerId == demo.Id).ToListAsync();
+            if (owned.Count > 0)
+            {
+                foreach (var product in owned)
+                {
+                    product.SellerId = catalogOwnerId;
+                }
+                await db.SaveChangesAsync();
+            }
+
+            await userManager.DeleteAsync(demo);
+        }
     }
 
     private static async Task<AppUser?> EnsureUser(UserManager<AppUser> userManager, string email, string password, string displayName, string role)
