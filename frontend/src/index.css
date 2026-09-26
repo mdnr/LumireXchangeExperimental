@@ -2028,6 +2028,50 @@ textarea {
   pointer-events: auto;
 }
 
+/* Orientation picker. Sits under the action row and stays legible over any
+   camera feed, with targets large enough to hit one-handed on a phone. */
+.ar-spin-row {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 8px 10px;
+  border-radius: 999px;
+  background: rgba(17, 17, 26, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.ar-spin-label {
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0 4px 0 2px;
+}
+
+.ar-spin-btn {
+  min-width: 52px;
+  min-height: 40px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ar-spin-btn.is-active {
+  background: #fff;
+  color: #11111a;
+  border-color: #fff;
+}
+
 .ar-photo-modal {
   position: fixed;
   inset: 0;

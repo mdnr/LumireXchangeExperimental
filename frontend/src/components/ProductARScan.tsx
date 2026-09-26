@@ -44,7 +44,9 @@ const ARM_RADIUS_TUNABLE = numParam('ar-arm', ARM_RADIUS_FACTOR);
 // dial normal, exposed here so it can be set without a code change. Try
 // ?ar-spin=0, 90, 180 then 270.
 const SPIN_DEG = ((((numParam('ar-spin', 0) % 360) + 360) % 360) / 90) * 90;
-const SPIN_QUAT = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), (SPIN_DEG * Math.PI) / 180);
+// Mutable so the on screen control can retune the watch live, without a reload.
+const spinState = { deg: SPIN_DEG, quat: new THREE.Quaternion() };
+spinState.quat.setFromAxisAngle(new THREE.Vector3(1, 0, 0), (SPIN_DEG * Math.PI) / 180);
 // 0 is allowed here, unlike the radius, because 0 is a meaningful tightness.
 const FACE_TIGHTNESS_TUNABLE = (() => {
   const raw = Number.parseFloat(PARAMS.get('ar-face') ?? '');
@@ -198,6 +200,8 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
   const [status, setStatus] = useState<'starting' | 'scan' | 'worn' | 'error'>('starting');
   const [error, setError] = useState<string | null>(null);
   const [photo, setPhoto] = useState<string | null>(null);
+// Starts from ?ar-spin= so a shared link still wins, then the buttons take over.
+const [spinDeg, setSpinDeg] = useState(SPIN_DEG);
 
   useEffect(() => {
     let disposed = false;
@@ -393,7 +397,7 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
         56,
       );
       ctx.fillText(
-        `standoff: ${Math.round(pose.armR)}px   wrist: ${Math.round(pose.wristPx)}px   depth: ${Math.round(cam.far)}px   spin: ${SPIN_DEG}deg   roll: ${pose.metric3d ? `${roll.deg.toFixed(0)}deg (3D)` : 'n/a (pinned)'}`,
+        `standoff: ${Math.round(pose.armR)}px   wrist: ${Math.round(pose.wristPx)}px   depth: ${Math.round(cam.far)}px   spin: ${spinState.deg}deg   roll: ${pose.metric3d ? `${roll.deg.toFixed(0)}deg (3D)` : 'n/a (pinned)'}`,
         14,
         72,
       );
@@ -734,7 +738,7 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
             watchQuat.setFromRotationMatrix(poseBasis);
             // Applied last, about the model's own dial axis, which is the one
             // degree of freedom the geometry cannot resolve.
-            if (SPIN_DEG) watchQuat.multiply(SPIN_QUAT);
+            if (spinState.deg) watchQuat.multiply(spinState.quat);
             watchGroup.quaternion.slerp(watchQuat, 0.35);
 
             // Seated on the skin on the side the lens can see.
@@ -851,6 +855,24 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
               <button type="button" className="ar-exit" onClick={onExit}>
                 Exit
               </button>
+            </div>
+            <div className="ar-spin-row" role="group" aria-label="Watch orientation">
+              <span className="ar-spin-label">Orientation</span>
+              {[0, 90, 180, 270].map((deg) => (
+                <button
+                  key={deg}
+                  type="button"
+                  className={`ar-spin-btn${spinDeg === deg ? ' is-active' : ''}`}
+                  aria-pressed={spinDeg === deg}
+                  onClick={() => {
+                    spinState.deg = deg;
+                    spinState.quat.setFromAxisAngle(new THREE.Vector3(1, 0, 0), (deg * Math.PI) / 180);
+                    setSpinDeg(deg);
+                  }}
+                >
+                  {deg}°
+                </button>
+              ))}
             </div>
           </div>
         )}
