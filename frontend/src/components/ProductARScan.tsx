@@ -43,18 +43,19 @@ const ARM_RADIUS_TUNABLE = numParam('ar-arm', ARM_RADIUS_FACTOR);
 // off the geometry. That single degree of freedom is a quarter turn about the
 // dial normal, exposed here so it can be set without a code change. Try
 // ?ar-spin=0, 90, 180 then 270.
-// Which way up the watch sits, as a quarter turn about the dial axis. This only
-// rolls the watch in its own plane and cannot change which way the dial points,
-// so it is not able to correct a dial that faces the wrong direction.
+// Which way the watch sits, as a quarter turn about the forearm axis. The
+// forearm is the axis that swings the dial around the arm, so this is the
+// control that brings a dial pointing off to the side round to face the lens.
+// Rotating about the dial axis instead can only roll the watch in its own plane
+// and can never change which way the dial points.
 const SPIN_DEG = ((((numParam('ar-spin', 0) % 360) + 360) % 360) / 90) * 90;
-// Which way the dial faces, as a quarter turn about the model's other in-plane
-// axis. This is the control that swings a dial pointing off to the side round
-// to face the lens. Kept separate from the spin above because they are different
-// degrees of freedom and only this one can fix a facing error.
+// A second quarter turn, about the model's third axis, for the remaining degree
+// of freedom once the facing and forearm turns are set.
 const FACE_DEG = ((((numParam('ar-facing', 0) % 360) + 360) % 360) / 90) * 90;
 // Mutable so the on screen controls can retune the watch live, without a reload.
 const spinState = { deg: SPIN_DEG, quat: new THREE.Quaternion() };
-spinState.quat.setFromAxisAngle(new THREE.Vector3(1, 0, 0), (SPIN_DEG * Math.PI) / 180);
+// Local Y, which the basis maps to the forearm.
+spinState.quat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), (SPIN_DEG * Math.PI) / 180);
 const faceState = { deg: FACE_DEG, quat: new THREE.Quaternion() };
 faceState.quat.setFromAxisAngle(new THREE.Vector3(0, 0, 1), (FACE_DEG * Math.PI) / 180);
 // 0 is allowed here, unlike the radius, because 0 is a meaningful tightness.
@@ -405,7 +406,7 @@ const [faceDeg, setFaceDeg] = useState(FACE_DEG);
         }`,
         `palmN  ${wristNormal.x.toFixed(2)}  ${wristNormal.y.toFixed(2)}  ${wristNormal.z.toFixed(2)}`,
         `armD   ${armDir.x.toFixed(2)}  ${armDir.y.toFixed(2)}  ${armDir.z.toFixed(2)}`,
-        `facing ${faceState.deg}   spin ${spinState.deg}   armR ${Math.round(pose.armR)}px`,
+        `facing ${faceState.deg}   forearm ${spinState.deg}   armR ${Math.round(pose.armR)}px`,
         diag.err ? `ERR ${diag.err.slice(0, 40)}` : `result ${age >= 0 ? `${age}ms` : 'never'}   send ${diag.sendMs}ms`,
       ];
       const size = Math.max(11, Math.min(15, Math.round(w / 34)));
@@ -893,7 +894,7 @@ const [faceDeg, setFaceDeg] = useState(FACE_DEG);
               ))}
             </div>
             <div className="ar-spin-row" role="group" aria-label="Watch orientation">
-              <span className="ar-spin-label">Orientation</span>
+              <span className="ar-spin-label">Forearm</span>
               {[0, 90, 180, 270].map((deg) => (
                 <button
                   key={deg}
@@ -902,7 +903,7 @@ const [faceDeg, setFaceDeg] = useState(FACE_DEG);
                   aria-pressed={spinDeg === deg}
                   onClick={() => {
                     spinState.deg = deg;
-                    spinState.quat.setFromAxisAngle(new THREE.Vector3(1, 0, 0), (deg * Math.PI) / 180);
+                    spinState.quat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), (deg * Math.PI) / 180);
                     setSpinDeg(deg);
                   }}
                 >
