@@ -43,10 +43,20 @@ const ARM_RADIUS_TUNABLE = numParam('ar-arm', ARM_RADIUS_FACTOR);
 // off the geometry. That single degree of freedom is a quarter turn about the
 // dial normal, exposed here so it can be set without a code change. Try
 // ?ar-spin=0, 90, 180 then 270.
+// Which way up the watch sits, as a quarter turn about the dial axis. This only
+// rolls the watch in its own plane and cannot change which way the dial points,
+// so it is not able to correct a dial that faces the wrong direction.
 const SPIN_DEG = ((((numParam('ar-spin', 0) % 360) + 360) % 360) / 90) * 90;
-// Mutable so the on screen control can retune the watch live, without a reload.
+// Which way the dial faces, as a quarter turn about the model's other in-plane
+// axis. This is the control that swings a dial pointing off to the side round
+// to face the lens. Kept separate from the spin above because they are different
+// degrees of freedom and only this one can fix a facing error.
+const FACE_DEG = ((((numParam('ar-facing', 0) % 360) + 360) % 360) / 90) * 90;
+// Mutable so the on screen controls can retune the watch live, without a reload.
 const spinState = { deg: SPIN_DEG, quat: new THREE.Quaternion() };
 spinState.quat.setFromAxisAngle(new THREE.Vector3(1, 0, 0), (SPIN_DEG * Math.PI) / 180);
+const faceState = { deg: FACE_DEG, quat: new THREE.Quaternion() };
+faceState.quat.setFromAxisAngle(new THREE.Vector3(0, 0, 1), (FACE_DEG * Math.PI) / 180);
 // 0 is allowed here, unlike the radius, because 0 is a meaningful tightness.
 const FACE_TIGHTNESS_TUNABLE = (() => {
   const raw = Number.parseFloat(PARAMS.get('ar-face') ?? '');
@@ -200,8 +210,9 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
   const [status, setStatus] = useState<'starting' | 'scan' | 'worn' | 'error'>('starting');
   const [error, setError] = useState<string | null>(null);
   const [photo, setPhoto] = useState<string | null>(null);
-// Starts from ?ar-spin= so a shared link still wins, then the buttons take over.
+// Starts from the URL so a shared link still wins, then the buttons take over.
 const [spinDeg, setSpinDeg] = useState(SPIN_DEG);
+const [faceDeg, setFaceDeg] = useState(FACE_DEG);
 
   useEffect(() => {
     let disposed = false;
@@ -397,7 +408,7 @@ const [spinDeg, setSpinDeg] = useState(SPIN_DEG);
         56,
       );
       ctx.fillText(
-        `standoff: ${Math.round(pose.armR)}px   wrist: ${Math.round(pose.wristPx)}px   depth: ${Math.round(cam.far)}px   spin: ${spinState.deg}deg   roll: ${pose.metric3d ? `${roll.deg.toFixed(0)}deg (3D)` : 'n/a (pinned)'}`,
+        `standoff: ${Math.round(pose.armR)}px   wrist: ${Math.round(pose.wristPx)}px   depth: ${Math.round(cam.far)}px   facing: ${faceState.deg}deg   spin: ${spinState.deg}deg   roll: ${pose.metric3d ? `${roll.deg.toFixed(0)}deg (3D)` : 'n/a (pinned)'}`,
         14,
         72,
       );
@@ -736,8 +747,9 @@ const [spinDeg, setSpinDeg] = useState(SPIN_DEG);
               poseBasis.makeBasis(across, armDir, faceDir);
             }
             watchQuat.setFromRotationMatrix(poseBasis);
-            // Applied last, about the model's own dial axis, which is the one
-            // degree of freedom the geometry cannot resolve.
+            // Applied last, in the model's own frame. The facing turn swings the
+            // dial round to the lens, the spin then rolls it in plane.
+            if (faceState.deg) watchQuat.multiply(faceState.quat);
             if (spinState.deg) watchQuat.multiply(spinState.quat);
             watchGroup.quaternion.slerp(watchQuat, 0.35);
 
@@ -855,6 +867,24 @@ const [spinDeg, setSpinDeg] = useState(SPIN_DEG);
               <button type="button" className="ar-exit" onClick={onExit}>
                 Exit
               </button>
+            </div>
+            <div className="ar-spin-row" role="group" aria-label="Dial facing">
+              <span className="ar-spin-label">Facing</span>
+              {[0, 90, 180, 270].map((deg) => (
+                <button
+                  key={deg}
+                  type="button"
+                  className={`ar-spin-btn${faceDeg === deg ? ' is-active' : ''}`}
+                  aria-pressed={faceDeg === deg}
+                  onClick={() => {
+                    faceState.deg = deg;
+                    faceState.quat.setFromAxisAngle(new THREE.Vector3(0, 0, 1), (deg * Math.PI) / 180);
+                    setFaceDeg(deg);
+                  }}
+                >
+                  {deg}°
+                </button>
+              ))}
             </div>
             <div className="ar-spin-row" role="group" aria-label="Watch orientation">
               <span className="ar-spin-label">Orientation</span>
