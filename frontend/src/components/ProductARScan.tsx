@@ -35,6 +35,16 @@ const numParam = (key: string, fallback: number) => {
   return Number.isFinite(raw) && raw > 0 ? raw : fallback;
 };
 const ARM_RADIUS_TUNABLE = numParam('ar-arm', ARM_RADIUS_FACTOR);
+
+// Which way up the watch sits. The dial is measurably along the model's local X
+// (the model is 0.0443 x 0.0756 x 0.0762, and two of its parts are perfectly
+// flat discs normal to X), but the model is near symmetric between its Y and Z
+// band axes, differing by 0.9%, so which one runs up the forearm cannot be read
+// off the geometry. That single degree of freedom is a quarter turn about the
+// dial normal, exposed here so it can be set without a code change. Try
+// ?ar-spin=0, 90, 180 then 270.
+const SPIN_DEG = ((((numParam('ar-spin', 0) % 360) + 360) % 360) / 90) * 90;
+const SPIN_QUAT = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), (SPIN_DEG * Math.PI) / 180);
 // 0 is allowed here, unlike the radius, because 0 is a meaningful tightness.
 const FACE_TIGHTNESS_TUNABLE = (() => {
   const raw = Number.parseFloat(PARAMS.get('ar-face') ?? '');
@@ -383,7 +393,7 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
         56,
       );
       ctx.fillText(
-        `standoff: ${Math.round(pose.armR)}px   wrist: ${Math.round(pose.wristPx)}px   depth: ${Math.round(cam.far)}px   roll: ${pose.metric3d ? `${roll.deg.toFixed(0)}deg (3D)` : 'n/a (pinned)'}`,
+        `standoff: ${Math.round(pose.armR)}px   wrist: ${Math.round(pose.wristPx)}px   depth: ${Math.round(cam.far)}px   spin: ${SPIN_DEG}deg   roll: ${pose.metric3d ? `${roll.deg.toFixed(0)}deg (3D)` : 'n/a (pinned)'}`,
         14,
         72,
       );
@@ -721,7 +731,11 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
               faceDir.crossVectors(across, armDir).normalize();
               poseBasis.makeBasis(across, armDir, faceDir);
             }
-            watchGroup.quaternion.slerp(watchQuat.setFromRotationMatrix(poseBasis), 0.35);
+            watchQuat.setFromRotationMatrix(poseBasis);
+            // Applied last, about the model's own dial axis, which is the one
+            // degree of freedom the geometry cannot resolve.
+            if (SPIN_DEG) watchQuat.multiply(SPIN_QUAT);
+            watchGroup.quaternion.slerp(watchQuat, 0.35);
 
             // Seated on the skin on the side the lens can see.
             watchGroup.position.copy(anchor).addScaledVector(faceDir, pose.armR);
