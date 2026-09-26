@@ -20,14 +20,11 @@ const WATCH_ARM_OFFSET = 0.45;
 // a little over twice as wide as it is deep, so ~0.45 sits close to a real
 // forearm without burying the case in it.
 const ARM_RADIUS_FACTOR = 0.45;
-// How hard the watch rocks as the wrist rolls, in degrees. This is a hard cap:
-// the watch face never leans further than this away from the lens, so it always
-// shows its dial and never turns its back or slides out of shot. Tunable with
-// ?ar-tilt= if you want it more or less dramatic.
-const MAX_TILT_DEG = 55;
-// How quickly a given palm-facing reading turns into lean. Higher reacts faster
-// to small rotations.
-const ROLL_GAIN = 2.2;
+// How much of your actual wrist twist the watch is allowed to show. 0 pins the
+// dial permanently to the camera and ignores the twist; 1 is fully physical and
+// would let the watch roll behind your arm and vanish. Keeping it well under 1 is
+// what makes the watch track your rotation while still always facing the lens.
+const FACE_TIGHTNESS = 0.55;
 const HOLD_MS = 350;
 const TRACK_MS = 110;
 const MEDIAPIPE_BASE = `${import.meta.env.BASE_URL}mediapipe/`;
@@ -38,17 +35,25 @@ const numParam = (key: string, fallback: number) => {
   return Number.isFinite(raw) && raw > 0 ? raw : fallback;
 };
 const ARM_RADIUS_TUNABLE = numParam('ar-arm', ARM_RADIUS_FACTOR);
-const MAX_TILT_RAD = (Math.min(85, numParam('ar-tilt', MAX_TILT_DEG)) * Math.PI) / 180;
+// 0 is allowed here, unlike the radius, because 0 is a meaningful tightness.
+const FACE_TIGHTNESS_TUNABLE = (() => {
+  const raw = Number.parseFloat(PARAMS.get('ar-face') ?? '');
+  return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : FACE_TIGHTNESS;
+})();
+// Which side of the wrist the watch sits on. Normally detected on the first
+// confident frame (assumed wrist-side-up, the way you would hold your arm out
+// to try a watch on). Override with ?ar-side=front if your first frame is
+// palm-forward, or if the watch ends up rendering back-to-front.
+const AR_SIDE = new URLSearchParams(window.location.search).get('ar-side');
 const USDZ_POSTER =
   'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 
 interface LandmarkPoint {
   x: number;
   y: number;
-  // MediaPipe does report a z, but it is regressed from synthetic renders rather
-  // than measured, so it is deliberately not read anywhere in this file. The
-  // palm-facing signal that drives the watch is computed from x and y alone,
-  // which is exact - see the cross product note where it is derived.
+  // MediaPipe reports depth in the same scale as x, smaller = nearer the
+  // camera. Dropping it is what made a palm-to-back flip untrackable: without
+  // depth there is no way to tell which side of the wrist you are looking at.
   z: number;
 }
 interface ScanResults {
@@ -241,35 +246,36 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
 
     const model = { cached: false, maxDim: 1, sceneObj: null as THREE.Group | null };
     const pose = {
+      visible: false,
       x: 0,
       y: 0,
       wristPx: 0,
-      // The arm axis in scene pixels: screen position of the wrist, and the unit
-      // direction the forearm runs in.
+      // The arm axis in scene pixels. The watch and both occluder proxies are
+      // driven from this single frame, so the proxy can never drift a frame
+      // behind the watch and make the occlusion crawl along the silhouette.
       axis: new THREE.Vector3(),
       dir: new THREE.Vector3(0, 1, 0),
+      normal: new THREE.Vector3(0, 0, 1),
       armR: 1,
-      // Low-passed 2D palm facing: positive when the palm squares up to the
-      // lens, negative when the back of the hand does.
-      palm: 0,
-      rel: 0,
-      face: 1,
-      visible: false,
+      // The measured wrist twist, kept purely for the debug readout now that
+      // the watch is held facing the camera.
+      far: false,
     };
-    // The pose the wrist was in when tracking first locked, used to zero the tilt
-    // so the watch always starts square to the lens.
-    const rest = { palm: null as number | null };
-    // Scratch vectors for the wrist frame. +x runs along the forearm, +z is the
-    // outward face of the watch.
     // The wrist frame is rebuilt from the 3D landmarks every frame: +x runs
     // along the forearm, +z is the outward face of the watch. Handing the model
     // a full basis instead of two screen-space angles is what lets a
     // palm-to-back flip swing the watch right around the arm.
+    const vUp = new THREE.Vector3();
+    const vRad = new THREE.Vector3();
+    const vOut = new THREE.Vector3();
+    const vX = new THREE.Vector3();
+    const vZ = new THREE.Vector3();
+    const side = { sign: AR_SIDE === 'front' ? -1 : 1, decided: !!AR_SIDE, palm: 0 };
     const anchor = new THREE.Vector3();
     const armDir = new THREE.Vector3(0, 1, 0);
+    const wristNormal = new THREE.Vector3(0, 0, 1);
     const faceDir = new THREE.Vector3(0, 0, 1);
     const across = new THREE.Vector3(1, 0, 0);
-    const armNormal = new THREE.Vector3(0, 1, 0);
     const poseBasis = new THREE.Matrix4();
     const watchQuat = new THREE.Quaternion();
     let cameraReady = false;
@@ -351,7 +357,7 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
       ctx.fillText(`engine: ${diag.state}   video: ${d.vw}x${d.vh}`, 14, 24);
       ctx.fillText(`hands: ${diag.hands}   wrist: ${Math.round(diag.wristPx)}px   gl: ${glFrames}fr`, 14, 40);
       ctx.fillText(
-        `roll: ${pose.rel.toFixed(2)} from rest   face: ${pose.face > 0 ? 'palm to lens' : 'back to lens'} (${pose.face.toFixed(2)})   cap: ${Math.round((MAX_TILT_RAD * 180) / Math.PI)}deg`,
+        `palm: ${side.palm > 0 ? 'at camera' : 'away'}   twist: ${pose.far ? 'rolled over' : 'up'}   face lock: ${FACE_TIGHTNESS_TUNABLE.toFixed(2)}`,
         14,
         56,
       );
@@ -419,58 +425,56 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
             pose.y = p0.y + (dy / len) * offset;
             pose.wristPx = wristPx;
 
-            // The palm normal's camera-facing component, computed from 2D only.
-            //
-            // For the palm normal n = a x b, the z component is a.x*b.y - a.y*b.x -
-            // the z terms of a and b cancel out of it completely, so this is exact
-            // and needs no depth at all. That matters because MediaPipe's landmark
-            // z is regressed from synthetic renders rather than measured, so
-            // anything built on it is noise: the watch never had a clean rotation
-            // signal to follow, which is why it would not turn.
-            //
-            // a runs wrist -> middle knuckle (along the forearm), b runs index
-            // knuckle -> ring knuckle (across the palm). Screen y points down, so
-            // the sign is inverted relative to a y-up frame.
-            const ax = p9.x - p0.x;
-            const ay = p9.y - p0.y;
-            const p13 = toScreen(lmOut[13]);
-            const bx = p13.x - p5.x;
-            const by = p13.y - p5.y;
-            const palmScale = Math.hypot(ax, ay) * Math.hypot(bx, by) || 1;
-            // Normalised so it is scale free: near +1 when the palm squares up to
-            // the lens, near 0 when the wrist is edge on, and negative once the
-            // back of the hand turns toward the camera.
-            const palmFacing = (ax * by - ay * bx) / palmScale;
-            // Calibrate against however you happen to be holding your hand when
-            // tracking first locks, so the watch starts square to the lens
-            // whichever way your wrist is turned and then responds to the
-            // movement from there. Without this it would start life tilted, and
-            // which way it started would depend on your hand and which side of
-            // your wrist you happened to hold up.
-            // The first confident frame sets the neutral pose, and the smoothed
-            // value starts there too. Starting it at zero instead would read as a
-            // full magnitude roll on the very first frame, swinging the watch to
-            // its stop and easing it back every time tracking locked on.
-            if (rest.palm === null) {
-              rest.palm = palmFacing;
-              pose.palm = palmFacing;
-              pose.face = 1;
-            }
-            // Low-pass it. The raw signal is exact but the landmarks themselves
-            // jitter, and a hard sign flip would snap the watch between sides.
-            pose.palm += (palmFacing - pose.palm) * 0.25;
-            const rel = pose.palm - rest.palm;
-            // The face blend is low-passed rather than switched, so a flip eases
-            // the watch through facing the lens instead of snapping between two
-            // angles. The deadband stops a hand hovering near edge-on from
-            // chattering.
-            const faceTarget = rel > 0.05 ? 1 : rel < -0.05 ? -1 : pose.face;
-            pose.face += (faceTarget - pose.face) * 0.18;
-            pose.rel = rel;
-            pose.dir.set(ax / len, -ay / len, 0).normalize();
-            pose.axis.set(pose.x, -pose.y, -0.5);
+            // Landmarks arrive with x scaled by image width and y by image
+            // height, so x is multiplied by the aspect ratio to put all three
+            // axes into the single unit MediaPipe uses for z.
+            const d = getDims();
+            const aspect = Math.max(d.vw, 1) / Math.max(d.vh, 1);
+            const lx = (i: number) => lmOut[i].x * aspect;
+            const ly = (i: number) => lmOut[i].y;
+            const lz = (i: number) => {
+              const z = lmOut[i].z;
+              // If a build of the tracker ever omits depth, fall back to zero so
+              // the watch stays on the wrist instead of vanishing on a NaN.
+              return typeof z === 'number' && Number.isFinite(z) ? z : 0;
+            };
 
+            // Landmark depth grows away from the lens while the ortho scene's
+            // depth grows toward it, and landmark y grows downward while scene y
+            // grows up, so the frame is built directly in scene space. z is
+            // normalised against image width like x is, so it takes the same
+            // aspect correction to land in a shared unit.
+            vUp.set(lx(9) - lx(0), -(ly(9) - ly(0)), -(lz(9) - lz(0)) * aspect);
+            vRad.set(lx(5) - lx(17), -(ly(5) - ly(17)), -(lz(5) - lz(17)) * aspect);
+            vOut.crossVectors(vUp, vRad);
+            if (vOut.lengthSq() < 1e-8) {
+              lost();
+              return;
+            }
+            vOut.normalize();
+            side.palm = vOut.z;
+
+            // Decide once which side of the wrist the watch sits on, assuming
+            // it is the side facing the lens when tracking first locks. Deciding
+            // once and then following the frame continuously avoids re-deriving
+            // the sign every frame, which would make the watch spin.
+            if (!side.decided) {
+              side.decided = true;
+              side.sign = vOut.z > 0 ? 1 : -1;
+            }
+
+            vX.copy(vUp).normalize();
+            vZ.copy(vOut).multiplyScalar(side.sign).projectOnPlane(vX);
+            if (vZ.lengthSq() < 1e-8) {
+              lost();
+              return;
+            }
+            vZ.normalize();
+            pose.dir.copy(vX);
+            pose.normal.copy(vZ);
+            pose.axis.set(pose.x, -pose.y, -0.5);
             pose.armR = ARM_RADIUS_TUNABLE * wristPx;
+            pose.far = vZ.z < 0;
             pose.visible = true;
             holdUntil = performance.now() + HOLD_MS;
             setStatus('worn');
@@ -602,38 +606,33 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
             // One smoothed frame drives the watch, so it cannot lag the wrist.
             anchor.lerp(pose.axis, 0.45);
             armDir.lerp(pose.dir, 0.45).normalize();
+            wristNormal.lerp(pose.normal, 0.45).normalize();
 
-            // Tilt the watch by how far the wrist has rolled, taken straight from
-            // the measured palm facing. It leans furthest when the wrist is edge
-            // on and comes back square as either side turns toward the lens, so
-            // the watch rocks as you move your hand and always ends up facing
-            // you. Saturating with tanh keeps small movements responsive while
-            // capping the lean at MAX_TILT, so the watch can never rotate far
-            // enough to show its back or leave the screen.
-            //
-            // The magnitude comes from the size of the roll and the direction
-            // from which face is presented. That split is forced by the signal:
-            // palmFacing is sin(theta), so it is identical for an equal roll in
-            // either direction and no 2D method can tell the two apart. Rather
-            // than pretend otherwise, the watch leans out and back symmetrically
-            // and eases through facing the lens as you turn your hand over.
-            const mag = MAX_TILT_RAD * Math.tanh(Math.atan(Math.abs(pose.rel) * ROLL_GAIN) / MAX_TILT_RAD);
-            const tilt = mag * pose.face;
+            // The radial direction on the camera side of the wrist: the camera
+            // axis with anything along the forearm removed. This is where the
+            // watch lives, which is why it stays put and stays visible no matter
+            // how far you turn your hand.
+            faceDir.copy(CAM_DIR).addScaledVector(armDir, -CAM_DIR.dot(armDir));
+            if (faceDir.lengthSq() < 1e-8) {
+              faceDir.copy(wristNormal);
+            }
+            faceDir.normalize();
 
-            // The watch face starts pointing at the lens and leans by the tilt,
-            // rotating about the forearm so the lean reads as the wrist rolling
-            // rather than the watch sliding around the arm.
-            across.set(-armDir.y, armDir.x, 0);
-            if (across.lengthSq() < 1e-8) across.set(1, 0, 0);
-            across.normalize();
-            faceDir.copy(CAM_DIR).multiplyScalar(Math.cos(tilt)).addScaledVector(across, -Math.sin(tilt)).normalize();
-            // makeBasis wants a right handed set, x cross y = z. With y = armDir
-            // and z = faceDir that forces x = armDir cross faceDir; using the
-            // reverse order yields a mirror, and a mirrored matrix is not a
-            // rotation, so deriving a quaternion from it produces a pose that
-            // drifts and flips as the wrist moves.
-            armNormal.crossVectors(armDir, faceDir).normalize();
-            poseBasis.makeBasis(armNormal, armDir, faceDir);
+            // Blend the true wrist twist with the camera-facing direction. Both
+            // are perpendicular to the forearm, so any weighted sum of them is
+            // too, and the basis stays orthonormal while the watch can never
+            // rotate past the lens. At 0 the dial is locked to the camera and
+            // ignores your twist; at 1 it is fully physical and would roll out
+            // of sight behind your arm.
+            faceDir.multiplyScalar(1).addScaledVector(wristNormal, FACE_TIGHTNESS_TUNABLE);
+            if (faceDir.lengthSq() < 1e-8) {
+              faceDir.copy(CAM_DIR);
+            }
+            faceDir.normalize();
+
+            across.crossVectors(armDir, faceDir).normalize();
+            faceDir.crossVectors(across, armDir).normalize();
+            poseBasis.makeBasis(across, armDir, faceDir);
             watchGroup.quaternion.slerp(watchQuat.setFromRotationMatrix(poseBasis), 0.35);
 
             // Seated on the skin on the side the lens can see.
