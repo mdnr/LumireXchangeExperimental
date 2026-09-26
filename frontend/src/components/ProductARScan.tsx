@@ -16,20 +16,15 @@ interface ProductARScanProps {
 const MIN_WRIST_PX = 28;
 const WATCH_WIDTH_FACTOR = 1.0;
 const WATCH_ARM_OFFSET = 0.45;
-// The occluding proxy for the forearm. Its radius is a fraction of the tracked
-// wrist width: a wrist is a little over twice as wide as it is deep, so ~0.45
-// lands close to a real forearm. Too fat and the occluder eats the near half of
-// the watch, too thin and the far half leaks through. Both ends are tunable
-// with ?ar-arm= and ?ar-hand= if a device disagrees.
+// How far the case stands off the skin, as a fraction of wrist width. A wrist is
+// a little over twice as wide as it is deep, so ~0.45 sits close to a real
+// forearm without burying the case in it.
 const ARM_RADIUS_FACTOR = 0.45;
-const HAND_RADIUS_FACTOR = 0.52;
-// A forearm is noticeably wider across than it is deep, so the proxy capsule is
-// scaled into an ellipse rather than left circular.
-const ARM_WIDEN = 1.35;
-// How far the proxy reaches past the wrist in each direction, as a multiple of
-// the wrist width.
-const ARM_REACH = 7.5;
-const HAND_REACH = 3.2;
+// How much of your actual wrist twist the watch is allowed to show. 0 pins the
+// dial permanently to the camera and ignores the twist; 1 is fully physical and
+// would let the watch roll behind your arm and vanish. Keeping it well under 1 is
+// what makes the watch track your rotation while still always facing the lens.
+const FACE_TIGHTNESS = 0.55;
 const HOLD_MS = 350;
 const TRACK_MS = 110;
 const MEDIAPIPE_BASE = `${import.meta.env.BASE_URL}mediapipe/`;
@@ -40,7 +35,11 @@ const numParam = (key: string, fallback: number) => {
   return Number.isFinite(raw) && raw > 0 ? raw : fallback;
 };
 const ARM_RADIUS_TUNABLE = numParam('ar-arm', ARM_RADIUS_FACTOR);
-const HAND_RADIUS_TUNABLE = numParam('ar-hand', HAND_RADIUS_FACTOR);
+// 0 is allowed here, unlike the radius, because 0 is a meaningful tightness.
+const FACE_TIGHTNESS_TUNABLE = (() => {
+  const raw = Number.parseFloat(PARAMS.get('ar-face') ?? '');
+  return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : FACE_TIGHTNESS;
+})();
 // Which side of the wrist the watch sits on. Normally detected on the first
 // confident frame (assumed wrist-side-up, the way you would hold your arm out
 // to try a watch on). Override with ?ar-side=front if your first frame is
@@ -220,21 +219,13 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
     scene.add(wristAnchor);
     wristAnchor.add(watchGroup);
 
-    // The forearm and hand are rebuilt as proxy capsules every frame from the
-    // landmarks. Their material has colorWrite disabled, so they draw nothing:
-    // they only stamp the depth buffer. The watch then renders with an ordinary
-    // depth test, which means the arm clips the watch per pixel for free. The
-    // far side of the watch disappears behind the arm while the near side stays
-    // solid, exactly as a real watch behaves, with no transparency involved.
-    const occluderMaterial = new THREE.MeshBasicMaterial({ colorWrite: false });
-    const armProxy = new THREE.Mesh(new THREE.CapsuleGeometry(1, 1, 4, 16), occluderMaterial);
-    const handProxy = new THREE.Mesh(new THREE.CapsuleGeometry(1, 1, 4, 16), occluderMaterial);
-    armProxy.visible = false;
-    handProxy.visible = false;
-    armProxy.renderOrder = -1;
-    handProxy.renderOrder = -1;
-    scene.add(armProxy);
-    scene.add(handProxy);
+    // No occluder, deliberately. Masking the watch against the arm was cutting
+    // away parts of it that should stay visible, and a watch that ducks behind
+    // your wrist when you turn your hand is not what a try-on is for. Instead the
+    // watch is pinned to whichever side of the wrist faces the lens, so it is
+    // solid and visible for the whole gesture and only its own back is ever
+    // hidden, which happens automatically once its face is toward the camera.
+    const CAM_DIR = new THREE.Vector3(0, 0, 1);
 
     const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, -1, 10);
 
@@ -266,9 +257,8 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
       dir: new THREE.Vector3(0, 1, 0),
       normal: new THREE.Vector3(0, 0, 1),
       armR: 1,
-      handR: 1,
-      // Informational only: the occluder decides what is hidden, this just
-      // feeds the debug readout.
+      // The measured wrist twist, kept purely for the debug readout now that
+      // the watch is held facing the camera.
       far: false,
     };
     // The wrist frame is rebuilt from the 3D landmarks every frame: +x runs
@@ -283,7 +273,8 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
     const side = { sign: AR_SIDE === 'front' ? -1 : 1, decided: !!AR_SIDE, palm: 0 };
     const anchor = new THREE.Vector3();
     const armDir = new THREE.Vector3(0, 1, 0);
-    const armNormal = new THREE.Vector3(0, 0, 1);
+    const wristNormal = new THREE.Vector3(0, 0, 1);
+    const faceDir = new THREE.Vector3(0, 0, 1);
     const across = new THREE.Vector3(1, 0, 0);
     const poseBasis = new THREE.Matrix4();
     const watchQuat = new THREE.Quaternion();
@@ -366,12 +357,12 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
       ctx.fillText(`engine: ${diag.state}   video: ${d.vw}x${d.vh}`, 14, 24);
       ctx.fillText(`hands: ${diag.hands}   wrist: ${Math.round(diag.wristPx)}px   gl: ${glFrames}fr`, 14, 40);
       ctx.fillText(
-        `palm: ${side.palm > 0 ? 'at camera' : 'away'}   watch: ${pose.far ? 'behind arm' : 'facing'}   side: ${side.sign > 0 ? 'dorsal' : 'palmar'}${AR_SIDE ? ' forced' : ''}`,
+        `palm: ${side.palm > 0 ? 'at camera' : 'away'}   twist: ${pose.far ? 'rolled over' : 'up'}   face lock: ${FACE_TIGHTNESS_TUNABLE.toFixed(2)}`,
         14,
         56,
       );
       ctx.fillText(
-        `arm proxy: r=${Math.round(pose.armR)}px  hand r=${Math.round(pose.handR)}px  depth=${Math.round(cam.far)}px`,
+        `standoff: ${Math.round(pose.armR)}px   wrist: ${Math.round(pose.wristPx)}px   depth: ${Math.round(cam.far)}px`,
         14,
         72,
       );
@@ -483,7 +474,6 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
             pose.normal.copy(vZ);
             pose.axis.set(pose.x, -pose.y, -0.5);
             pose.armR = ARM_RADIUS_TUNABLE * wristPx;
-            pose.handR = HAND_RADIUS_TUNABLE * wristPx;
             pose.far = vZ.z < 0;
             pose.visible = true;
             holdUntil = performance.now() + HOLD_MS;
@@ -612,46 +602,45 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
         }
         if (model.cached) {
           watchGroup.visible = pose.visible;
-          armProxy.visible = pose.visible;
-          handProxy.visible = pose.visible;
           if (pose.visible) {
-            // One smoothed frame drives the watch and both proxies. Smoothing
-            // them independently would let the proxy lag behind the watch and
-            // make the occlusion shimmer.
+            // One smoothed frame drives the watch, so it cannot lag the wrist.
             anchor.lerp(pose.axis, 0.45);
             armDir.lerp(pose.dir, 0.45).normalize();
-            armNormal.lerp(pose.normal, 0.45).normalize();
-            // The outward normal has to stay square to the forearm or the watch
-            // shears as the wrist bends.
-            armNormal.projectOnPlane(armDir).normalize();
-            across.crossVectors(armDir, armNormal).normalize();
-            armNormal.crossVectors(across, armDir).normalize();
-            poseBasis.makeBasis(across, armDir, armNormal);
+            wristNormal.lerp(pose.normal, 0.45).normalize();
+
+            // The radial direction on the camera side of the wrist: the camera
+            // axis with anything along the forearm removed. This is where the
+            // watch lives, which is why it stays put and stays visible no matter
+            // how far you turn your hand.
+            faceDir.copy(CAM_DIR).addScaledVector(armDir, -CAM_DIR.dot(armDir));
+            if (faceDir.lengthSq() < 1e-8) {
+              faceDir.copy(wristNormal);
+            }
+            faceDir.normalize();
+
+            // Blend the true wrist twist with the camera-facing direction. Both
+            // are perpendicular to the forearm, so any weighted sum of them is
+            // too, and the basis stays orthonormal while the watch can never
+            // rotate past the lens. At 0 the dial is locked to the camera and
+            // ignores your twist; at 1 it is fully physical and would roll out
+            // of sight behind your arm.
+            faceDir.multiplyScalar(1).addScaledVector(wristNormal, FACE_TIGHTNESS_TUNABLE);
+            if (faceDir.lengthSq() < 1e-8) {
+              faceDir.copy(CAM_DIR);
+            }
+            faceDir.normalize();
+
+            across.crossVectors(armDir, faceDir).normalize();
+            faceDir.crossVectors(across, armDir).normalize();
+            poseBasis.makeBasis(across, armDir, faceDir);
             watchGroup.quaternion.slerp(watchQuat.setFromRotationMatrix(poseBasis), 0.35);
 
-            // Seated on the skin: the case is pushed out along the outward
-            // normal by the arm's own depth. Because that offset rides the
-            // normal, rolling the wrist carries the watch around to the far
-            // side of the arm, which is what puts it behind the proxy.
-            watchGroup.position.copy(anchor).addScaledVector(armNormal, pose.armR);
-
-            // A forearm is wider across than it is deep, so the proxy is
-            // elliptical. Both reach well past the wrist so the watch cannot
-            // slide off the end of the arm and lose its occluder.
-            const armLen = Math.max(2, ARM_REACH * pose.wristPx);
-            const handLen = Math.max(2, HAND_REACH * pose.wristPx);
-            armProxy.quaternion.setFromRotationMatrix(poseBasis);
-            armProxy.position.copy(anchor).addScaledVector(armDir, -armLen / 2);
-            armProxy.scale.set(pose.armR * ARM_WIDEN, Math.max(1, armLen - 2 * pose.armR), pose.armR);
-            handProxy.quaternion.setFromRotationMatrix(poseBasis);
-            handProxy.position.copy(anchor).addScaledVector(armDir, handLen / 2);
-            handProxy.scale.set(pose.handR * ARM_WIDEN, Math.max(1, handLen - 2 * pose.handR), pose.handR);
+            // Seated on the skin on the side the lens can see.
+            watchGroup.position.copy(anchor).addScaledVector(faceDir, pose.armR);
 
             const pxPerModelWidth = (WATCH_WIDTH_FACTOR * pose.wristPx) / model.maxDim;
             watchGroup.scale.setScalar(pxPerModelWidth);
-            // The depth range has to clear the occluders, not just the watch, or
-            // the arm is clipped away exactly where the watch passes behind it.
-            const depth = Math.max(model.maxDim * pxPerModelWidth, armLen, handLen) + 6;
+            const depth = Math.max(1e-6, model.maxDim * pxPerModelWidth) + 4;
             if (Math.abs(cam.far - depth) > 1e-3) {
               cam.near = -depth;
               cam.far = depth;
