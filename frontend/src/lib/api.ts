@@ -1,6 +1,7 @@
 import type {
   AuthResponse,
   MeResponse,
+  ModelAlignment,
   ModelMaterial,
   Product,
   ProductDetailResponse,
@@ -117,6 +118,18 @@ export const api = {
     return request<{ imageUrls: string[] }>(`/api/products/${slug}/images`, {
       method: 'POST',
       body: form,
+    });
+  },
+
+  /**
+   * Save the seller's chosen wrist placement. Its own endpoint rather than part
+   * of updateProduct, so saving the rest of the product cannot clear it.
+   * Pass null to clear the alignment and return the model to authored orientation.
+   */
+  saveModelAlignment(slug: string, alignment: ModelAlignment | null): Promise<{ alignment: ModelAlignment | null }> {
+    return request<{ alignment: ModelAlignment | null }>(`/api/products/${slug}/alignment`, {
+      method: 'PUT',
+      body: JSON.stringify(alignment),
     });
   },
 };

@@ -5,6 +5,7 @@ import { RequireSeller } from './components/RequireSeller';
 import { CataloguePage } from './pages/CataloguePage';
 import { HomePage } from './pages/HomePage';
 import { LoginPage } from './pages/LoginPage';
+import { ModelAlignPage } from './pages/ModelAlignPage';
 import { ProductDetailPage } from './pages/ProductDetailPage';
 import { ProductFormPage } from './pages/ProductFormPage';
 import { RegisterPage } from './pages/RegisterPage';
@@ -54,6 +55,14 @@ function App() {
             element={
               <RequireSeller>
                 <ProductFormPage />
+              </RequireSeller>
+            }
+          />
+          <Route
+            path="/seller/products/:slug/align"
+            element={
+              <RequireSeller>
+                <ModelAlignPage />
               </RequireSeller>
             }
           />

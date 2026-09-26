@@ -13,12 +13,14 @@ import {
   useXRInputSourceStates,
 } from '@react-three/xr';
 import { applyProductMaterials } from '../lib/modelMaterials';
-import type { Material, ModelMaterial } from '../lib/types';
+import type { Material, ModelAlignment, ModelMaterial } from '../lib/types';
+import { toWristAlignment, WRIST_WIDTH_METRES, type WristAlignment } from '../lib/wristAlignment';
 
 interface ProductARProps {
   modelUrl: string;
   material?: Material;
   modelMaterials?: ModelMaterial[];
+  alignment?: ModelAlignment | null;
   revision?: string | number;
   onExit: () => void;
 }
@@ -27,21 +29,40 @@ interface ArShared {
   fetchUrl: string;
   material?: Material;
   modelMaterials?: ModelMaterial[];
+  alignment: WristAlignment;
   scale: { current: number };
 }
 
 const WATCH_TARGET_METERS = 0.1;
 const FLOAT_POSITION: [number, number, number] = [0, -0.18, -0.55];
 
+// Maps the canonical wrist frame onto the WebXR `wrist` space, so that an
+// alignment saved on the align page means the same thing here as it does in the
+// camera-overlay try-on.
+//
+// This is the one line in the feature that has not been confirmed against a real
+// device, because the MediaPipe frame this codebase is built around is not the
+// same convention as the WebXR one and neither can be derived from the other
+// without hardware. It is left as identity, which assumes the two agree, and
+// isolated here so that correcting it is a one-line change rather than a hunt.
+//
+// To check it: align a model on the align page, open native AR, wear it, and turn
+// your wrist. The watch should stay seated exactly as the align page showed it. If
+// it is rotated by a fixed amount whatever the wrist does, that fixed amount is
+// this constant.
+const CANONICAL_TO_WRIST_SPACE = new THREE.Quaternion();
+
 const arShared: ArShared = {
   fetchUrl: '',
+  alignment: toWristAlignment(null),
   scale: { current: 1 },
 };
 
-export function ProductAR({ modelUrl, material, modelMaterials, revision, onExit }: ProductARProps) {
+export function ProductAR({ modelUrl, material, modelMaterials, alignment, revision, onExit }: ProductARProps) {
   arShared.fetchUrl = revision ? `${modelUrl}?v=${revision}` : modelUrl;
   arShared.material = material;
   arShared.modelMaterials = modelMaterials;
+  arShared.alignment = toWristAlignment(alignment);
 
   const store = useMemo(
     () =>
@@ -161,7 +182,9 @@ function WatchModel() {
   useFrame(() => {
     applyProductMaterials(scene, materials, arShared.material, arShared.modelMaterials);
     if (scaled.current) {
-      scaled.current.scale.setScalar(fit.current.scale * arShared.scale.current);
+      // The seller's scale is the baseline, so the slider is a viewer trim on top
+      // of a size somebody actually chose, not a replacement for one.
+      scaled.current.scale.setScalar(fit.current.scale * arShared.alignment.scale * arShared.scale.current);
     }
   });
 
@@ -170,6 +193,31 @@ function WatchModel() {
       <primitive object={scene} />
     </group>
   );
+}
+
+/**
+ * Seats the watch in the WebXR wrist space using the seller's saved alignment,
+ * which is stated in wrist widths, so the offset is converted to the metres this
+ * tracker works in.
+ *
+ * This deliberately does not billboard. It used to, which meant the watch always
+ * turned to face the lens and so never visibly got the orientation wrong, but it
+ * also meant the wrist was not being tracked at all and a seller's alignment
+ * would have been discarded without anyone noticing. A seated watch that is
+ * subtly off is the thing this page is built to remove.
+ */
+function WristPlacement({ children }: { children: React.ReactNode }) {
+  const ref = useRef<THREE.Group>(null);
+  const align = arShared.alignment;
+
+  useLayoutEffect(() => {
+    const g = ref.current;
+    if (!g) return;
+    g.quaternion.copy(CANONICAL_TO_WRIST_SPACE).multiply(align.quat);
+    g.position.copy(align.offset).multiplyScalar(WRIST_WIDTH_METRES);
+  }, [align]);
+
+  return <group ref={ref}>{children}</group>;
 }
 
 function WristHand() {
@@ -181,9 +229,9 @@ function WristHand() {
       {isLeft && (
         <XRSpace space="wrist">
           <group position={[0, 0.015, 0]}>
-            <Billboard>
+            <WristPlacement>
               <WatchModel />
-            </Billboard>
+            </WristPlacement>
           </group>
         </XRSpace>
       )}
@@ -194,6 +242,8 @@ function WristHand() {
 function FloatingOrAnchored() {
   const inputs = useXRInputSourceStates();
   if (inputs.some((state) => state.type === 'hand')) return null;
+  // No wrist to sit on, so there is nothing to align to. Here billboarding is not
+  // a shortcut, it is the correct thing to do: the watch faces whoever is looking.
   return (
     <group position={FLOAT_POSITION}>
       <Billboard>

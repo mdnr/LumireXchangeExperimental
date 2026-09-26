@@ -2090,3 +2090,207 @@ textarea {
   border-radius: var(--radius);
   box-shadow: var(--shadow);
 }
+
+/* ---------- Studio: align a model on a wrist ---------- */
+.align-page {
+  padding-bottom: 64px;
+}
+
+.align-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 8px 0 20px;
+}
+
+.align-head h1 {
+  margin: 0 0 6px;
+}
+
+.align-head p {
+  margin: 0;
+  max-width: 62ch;
+}
+
+.align-badge {
+  display: inline-block;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.align-badge.is-saved {
+  border-color: var(--success);
+  color: var(--success);
+}
+
+.align-badge.is-dirty {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.align-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 20px;
+  align-items: start;
+}
+
+.align-stage {
+  padding: 0;
+  overflow: hidden;
+}
+
+.align-stage canvas {
+  display: block;
+  width: 100%;
+  height: 62vh;
+  min-height: 380px;
+  touch-action: none;
+  cursor: grab;
+}
+
+.align-stage-hint {
+  margin: 0;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+}
+
+/* Frame axis tags, drawn inside the 3D canvas. Labelled in words as well as
+   colour, because red against green is the one pair that cannot be told apart. */
+.align-axis-tag {
+  display: inline-block;
+  padding: 3px 9px;
+  border: 1px solid;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.66);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  pointer-events: none;
+  user-select: none;
+}
+
+.align-empty {
+  max-width: 320px;
+  padding: 18px 20px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  text-align: center;
+}
+
+.align-empty p {
+  margin: 0 0 6px;
+}
+
+.align-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  position: sticky;
+  top: 16px;
+}
+
+.align-field-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.align-slider {
+  display: block;
+  margin-top: 10px;
+}
+
+.align-slider > span {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-size: 0.9rem;
+}
+
+.align-slider input[type='range'] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.align-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.align-stored {
+  font-size: 0.85rem;
+}
+
+.align-stored summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.align-stored pre {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-3);
+  font-size: 0.76rem;
+  line-height: 1.45;
+  overflow-x: auto;
+}
+
+.align-cta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.align-cta p {
+  margin: 4px 0 0;
+}
+
+.align-cta .btn {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+@media (max-width: 900px) {
+  .align-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .align-panel {
+    position: static;
+  }
+
+  .align-stage canvas {
+    height: 52vh;
+  }
+}
+
+@media (max-width: 560px) {
+  .align-head {
+    flex-direction: column;
+  }
+
+  .align-cta {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}

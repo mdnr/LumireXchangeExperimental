@@ -292,6 +292,7 @@ export function ProductDetailPage() {
             modelUrl={product.modelUrl}
             material={arMaterial}
             modelMaterials={arModelMaterials}
+            alignment={product.modelAlignment}
             revision={product.updatedAt}
             onExit={() => setArOpen(null)}
           />
@@ -303,6 +304,7 @@ export function ProductDetailPage() {
             modelUrl={product.modelUrl}
             material={arMaterial}
             modelMaterials={arModelMaterials}
+            alignment={product.modelAlignment}
             revision={product.updatedAt}
             usdzUrl={usdzUrlFor(product.modelUrl)}
             onExit={() => setArOpen(null)}

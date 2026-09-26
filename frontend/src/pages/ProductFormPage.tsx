@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useRef, useState, type ChangeEvent, type Dra
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { averageColorFromImage } from '../lib/color';
-import { emptyProduct, DEFAULT_MATERIAL, type ColorPreset, type ColorVariant, type Feature, type Material, type ModelMaterial, type ProductInput, type Spec } from '../lib/types';
+import { emptyProduct, DEFAULT_MATERIAL, type ColorPreset, type ColorVariant, type Feature, type Material, type ModelAlignment, type ModelMaterial, type ProductInput, type Spec } from '../lib/types';
 
 const ProductViewer = lazy(() =>
   import('../components/ProductViewer').then((m) => ({ default: m.ProductViewer })),
@@ -58,6 +58,9 @@ export function ProductFormPage() {
   const [modelRevision, setModelRevision] = useState<number>(0);
   const [previewBg, setPreviewBg] = useState<'white' | 'mist' | 'dark'>('white');
   const [step, setStep] = useState<1 | 2>(() => (searchParams.get('step') === '2' ? 2 : 1));
+  // Read-only here. The alignment is written on its own page by its own endpoint,
+  // so this form can neither edit it nor clear it by omission.
+  const [productAlignment, setProductAlignment] = useState<ModelAlignment | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const imagesRef = useRef<HTMLInputElement>(null);
 
@@ -100,6 +103,7 @@ export function ProductFormPage() {
           modelMaterials: (p.modelMaterials as ModelMaterial[] | undefined) ?? [],
           colorPresets: (p.colorPresets as ColorPreset[] | undefined) ?? [],
         });
+        setProductAlignment(p.modelAlignment ?? null);
         setCategories((prev) => (prev.includes(p.category) ? prev : [...prev, p.category]));
       })
       .catch((err: Error) => setError(err.message))
@@ -678,23 +682,44 @@ export function ProductFormPage() {
             </div>
 
             {isEdit && slug ? (
-              <div
-                className={dragOver ? 'upload-zone drag-active' : 'upload-zone'}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  setDragOver(true);
-                }}
-                onDragLeave={() => setDragOver(false)}
-                onDrop={handleDrop}
-              >
-                <input ref={fileRef} type="file" accept=".glb,.gltf,model/gltf-binary" className="hidden-input" onChange={handleUpload} />
-                <button type="button" className="btn btn-primary" onClick={() => fileRef.current?.click()} disabled={uploading}>
-                  {uploading ? 'Uploading…' : form.modelUrl ? 'Replace 3D model' : 'Upload 3D model'}
-                </button>
-                <span className="muted small">
-                  Drop a .glb here or click to browse. The preview updates instantly.
-                </span>
-              </div>
+              <>
+                <div
+                  className={dragOver ? 'upload-zone drag-active' : 'upload-zone'}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setDragOver(true);
+                  }}
+                  onDragLeave={() => setDragOver(false)}
+                  onDrop={handleDrop}
+                >
+                  <input ref={fileRef} type="file" accept=".glb,.gltf,model/gltf-binary" className="hidden-input" onChange={handleUpload} />
+                  <button type="button" className="btn btn-primary" onClick={() => fileRef.current?.click()} disabled={uploading}>
+                    {uploading ? 'Uploading…' : form.modelUrl ? 'Replace 3D model' : 'Upload 3D model'}
+                  </button>
+                  <span className="muted small">
+                    Drop a .glb here or click to browse. The preview updates instantly.
+                  </span>
+                </div>
+
+                {/* A fresh model has never been aligned, and a replaced one almost
+                    certainly is not aligned for the new geometry, so this is the
+                    next step rather than an extra. */}
+                {form.modelUrl && (
+                  <div className="align-cta">
+                    <div>
+                      <strong>Fit it to a wrist</strong>
+                      <p className="muted small">
+                        {productAlignment
+                          ? 'Aligned and saved. Reopen to adjust how it sits on the hand.'
+                          : 'Not aligned yet. Turn the model on a reference hand and save, so it sits correctly in try-on AR.'}
+                      </p>
+                    </div>
+                    <Link className="btn btn-secondary" to={`/seller/products/${slug}/align`}>
+                      {productAlignment ? 'Adjust alignment' : 'Align on wrist'}
+                    </Link>
+                  </div>
+                )}
+              </>
             ) : (
               <p className="muted small">Save the product first, then drop a .glb model here.</p>
             )}

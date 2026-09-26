@@ -2,82 +2,45 @@ import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { applyProductMaterials } from '../lib/modelMaterials';
-import type { Material, ModelMaterial } from '../lib/types';
+import type { Material, ModelAlignment, ModelMaterial } from '../lib/types';
+import { toWristAlignment, WATCH_WIDTH_FACTOR, type WristAlignment } from '../lib/wristAlignment';
 
 interface ProductARScanProps {
   modelUrl: string;
   material?: Material;
   modelMaterials?: ModelMaterial[];
+  /**
+   * The seller's saved wrist placement. Held in a ref rather than read during
+   * render, because the whole camera and tracker session is built in one effect
+   * and this must never be a reason to tear it down and ask for camera access
+   * again mid-session.
+   */
+  alignment?: ModelAlignment | null;
   revision?: string | number;
   usdzUrl?: string;
   onExit: () => void;
 }
 
 const MIN_WRIST_PX = 28;
-const WATCH_WIDTH_FACTOR = 1.0;
-const WATCH_ARM_OFFSET = 0.45;
-// How far the case stands off the skin, as a fraction of wrist width. A wrist is
-// a little over twice as wide as it is deep, so ~0.45 sits close to a real
-// forearm without burying the case in it.
-const ARM_RADIUS_FACTOR = 0.45;
-// How much of your actual wrist twist the watch is allowed to show. 0 pins the
-// dial permanently to the camera and ignores the twist; 1 is fully physical and
-// would let the watch roll behind your arm and vanish. Keeping it well under 1 is
-// what makes the watch track your rotation while still always facing the lens.
-const FACE_TIGHTNESS = 0.55;
 const HOLD_MS = 350;
 const TRACK_MS = 110;
+// Where along the forearm the watch's origin is seated, in wrist widths, measured
+// from the wrist landmark toward the middle of the palm. This is the tracker's
+// own geometry and says nothing about the model, which is why it survives the
+// removal of the orientation guessing: the hand landmarks are fixed points, so
+// this only decides which point the model is hung from.
+const WATCH_ARM_OFFSET = 0.45;
 const MEDIAPIPE_BASE = `${import.meta.env.BASE_URL}mediapipe/`;
 const DEBUG = new URLSearchParams(window.location.search).has('ar-debug');
-const PARAMS = new URLSearchParams(window.location.search);
-const numParam = (key: string, fallback: number) => {
-  const raw = Number.parseFloat(PARAMS.get(key) ?? '');
-  return Number.isFinite(raw) && raw > 0 ? raw : fallback;
-};
-const ARM_RADIUS_TUNABLE = numParam('ar-arm', ARM_RADIUS_FACTOR);
-
-// Which way up the watch sits. The dial is measurably along the model's local X
-// (the model is 0.0443 x 0.0756 x 0.0762, and two of its parts are perfectly
-// flat discs normal to X), but the model is near symmetric between its Y and Z
-// band axes, differing by 0.9%, so which one runs up the forearm cannot be read
-// off the geometry. That single degree of freedom is a quarter turn about the
-// dial normal, exposed here so it can be set without a code change. Try
-// ?ar-spin=0, 90, 180 then 270.
-// A quarter turn about the forearm axis, kept as a trim override now that the
-// basis below puts the measured dial axis on the palm normal. Both dials default
-// to zero because zero is correct: the frame orients the watch on its own.
-const SPIN_DEG = ((((numParam('ar-spin', 0) % 360) + 360) % 360) / 90) * 90;
-// A second quarter turn, about the model's third axis, for the remaining degree
-// of freedom once the facing and forearm turns are set.
-const FACE_DEG = ((((numParam('ar-facing', 0) % 360) + 360) % 360) / 90) * 90;
-// The residual tilt, in whole degrees rather than quarter turns, because this
-// one is not a mapping error. The dial reads on local Z but leans back a little,
-// so the model was authored with the case tipped up off the band. A quarter turn
-// cannot express that, and snapping to 90 degree steps left the watch visibly
-// crooked, so this is a free angle about the forearm and trims it flat.
-const TILT_DEG = Math.round(Math.max(-30, Math.min(30, numParam('ar-tilt', 0))));
-// Mutable so the on screen controls can retune the watch live, without a reload.
-const spinState = { deg: SPIN_DEG, quat: new THREE.Quaternion() };
-// Local Y, which is the dial's own normal once the basis below is applied.
-spinState.quat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), (SPIN_DEG * Math.PI) / 180);
-const faceState = { deg: FACE_DEG, quat: new THREE.Quaternion() };
-faceState.quat.setFromAxisAngle(new THREE.Vector3(0, 0, 1), (FACE_DEG * Math.PI) / 180);
-const tiltState = { deg: TILT_DEG, quat: new THREE.Quaternion() };
-// Local X, which the basis maps to the forearm, so this leans the dial off the
-// band without moving it around the wrist.
-tiltState.quat.setFromAxisAngle(new THREE.Vector3(1, 0, 0), (TILT_DEG * Math.PI) / 180);
-// 0 is allowed here, unlike the radius, because 0 is a meaningful tightness.
-const FACE_TIGHTNESS_TUNABLE = (() => {
-  const raw = Number.parseFloat(PARAMS.get('ar-face') ?? '');
-  return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : FACE_TIGHTNESS;
-})();
-// Which side of the wrist the watch sits on. Normally detected on the first
-// confident frame (assumed wrist-side-up, the way you would hold your arm out
-// to try a watch on). Override with ?ar-side=front if your first frame is
-// palm-forward, or if the watch ends up rendering back-to-front.
-const AR_SIDE = new URLSearchParams(window.location.search).get('ar-side');
 const USDZ_POSTER =
   'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+
+// ---------------------------------------------------------------------------
+// The watch's placement is not worked out here. It is stated, once, by the seller
+// on the align page against a reference hand, and arrives as a saved alignment.
+// The frame itself, and the reading of one, live in lib/wristAlignment.ts, shared
+// with the page the seller aligns on.
+// ---------------------------------------------------------------------------
 
 interface LandmarkPoint {
   x: number;
@@ -201,8 +164,17 @@ function loadModel(url: string) {
   return modelCache.get(url)!;
 }
 
-export function ProductARScan({ modelUrl, material, modelMaterials, revision, usdzUrl, onExit }: ProductARScanProps) {
+export function ProductARScan({ modelUrl, material, modelMaterials, alignment, revision, usdzUrl, onExit }: ProductARScanProps) {
   const fetchUrl = revision ? `${modelUrl}?v=${revision}` : modelUrl;
+
+  // Mirrored into a ref so the effect that owns the camera session can read the
+  // current alignment every frame without depending on it. Adding it to that
+  // effect's dependency list would restart the camera and the hand tracker, and on
+  // a phone that means asking for camera permission again mid-try-on.
+  const alignRef = useRef<WristAlignment>(toWristAlignment(alignment));
+  useEffect(() => {
+    alignRef.current = toWristAlignment(alignment);
+  }, [alignment]);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const glRef = useRef<HTMLDivElement>(null);
@@ -219,10 +191,6 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
   const [status, setStatus] = useState<'starting' | 'scan' | 'worn' | 'error'>('starting');
   const [error, setError] = useState<string | null>(null);
   const [photo, setPhoto] = useState<string | null>(null);
-// Starts from the URL so a shared link still wins, then the buttons take over.
-const [spinDeg, setSpinDeg] = useState(SPIN_DEG);
-  const [faceDeg, setFaceDeg] = useState(FACE_DEG);
-  const [tiltDeg, setTiltDeg] = useState(TILT_DEG);
 
   useEffect(() => {
     let disposed = false;
@@ -349,7 +317,6 @@ const [spinDeg, setSpinDeg] = useState(SPIN_DEG);
       axis: new THREE.Vector3(),
       dir: new THREE.Vector3(0, 1, 0),
       normal: new THREE.Vector3(0, 0, 1),
-      armR: 1,
       // The measured wrist twist, kept purely for the debug readout now that
       // the watch is held facing the camera.
       far: false,
@@ -379,7 +346,7 @@ const [spinDeg, setSpinDeg] = useState(SPIN_DEG);
     const vOut = new THREE.Vector3();
     const vX = new THREE.Vector3();
     const vZ = new THREE.Vector3();
-    const side = { sign: AR_SIDE === 'front' ? -1 : 1, decided: !!AR_SIDE, palm: 0 };
+    const side = { sign: 1, decided: true, palm: 0 };
     const anchor = new THREE.Vector3();
     const armDir = new THREE.Vector3(0, 1, 0);
     const wristNormal = new THREE.Vector3(0, 0, 1);
@@ -468,7 +435,8 @@ const [spinDeg, setSpinDeg] = useState(SPIN_DEG);
         }`,
         `palmN  ${wristNormal.x.toFixed(2)}  ${wristNormal.y.toFixed(2)}  ${wristNormal.z.toFixed(2)}`,
         `armD   ${armDir.x.toFixed(2)}  ${armDir.y.toFixed(2)}  ${armDir.z.toFixed(2)}`,
-        `facing ${faceState.deg}   forearm ${spinState.deg}   tilt ${tiltState.deg}   armR ${Math.round(pose.armR)}px`,
+        `align ${alignRef.current.quat.w === 1 && !alignRef.current.offset.lengthSq() ? 'NONE (seller has not aligned this)' : 'saved'}`,
+        `wristW ${Math.round(pose.wristPx)}px   off ${alignRef.current.offset.x.toFixed(2)} ${alignRef.current.offset.y.toFixed(2)} ${alignRef.current.offset.z.toFixed(2)}   x${alignRef.current.scale.toFixed(2)}`,
         ...(AXES ? ['probe: X red  Y green  Z blue'] : []),
         diag.err ? `ERR ${diag.err.slice(0, 40)}` : `result ${age >= 0 ? `${age}ms` : 'never'}   send ${diag.sendMs}ms`,
       ];
@@ -640,7 +608,6 @@ const [spinDeg, setSpinDeg] = useState(SPIN_DEG);
               }
             }
             pose.axis.set(pose.x, -pose.y, -0.5);
-            pose.armR = ARM_RADIUS_TUNABLE * wristPx;
             pose.far = vZ.z < 0;
             pose.visible = true;
             holdUntil = performance.now() + HOLD_MS;
@@ -776,24 +743,12 @@ const [spinDeg, setSpinDeg] = useState(SPIN_DEG);
             wristNormal.lerp(pose.normal, 0.45).normalize();
 
             if (pose.metric3d) {
-              // Real wrist rotation. The palm normal is the direction the dial
-              // should point, taken straight from the metric hand, so the watch
-              // rolls with the wrist and shows its back once the hand turns over.
-              //
-              // The column order below was measured, not inferred. Reading the
-              // model's own axes off the screen with ?ar-axes puts the dial on
-              // local Z, not on local X as the bounding box suggested, since the
-              // thinnest axis of a watch is not the one its face looks out of.
-              // The band then had to be measured separately, and it came back
-              // crossways, which put the forearm on local X rather than Y. So:
-              // Z takes the palm normal, X runs up the arm, and Y is left around
-              // the wrist circumference.
-              //
-              // Only the dial could be read off one probe reading, and it was not
-              // enough on its own: the band and the forearm compete for the two
-              // axes in the dial's plane, and a bounding box cannot separate
-              // them because they differ by under 1%. Both were confirmed on
-              // device before being written in here.
+              // The wrist frame, and nothing else. This maps the canonical frame
+              // (+X up the forearm, +Y around the wrist, +Z out of the back of the
+              // hand) onto the camera, and says nothing whatsoever about the
+              // model. The palm normal is the direction the back of the hand
+              // faces, so the watch rolls with the wrist and shows its back once
+              // the hand turns over.
               //
               // Right handed by construction: the third column has to satisfy
               // x cross y = z, so the middle column is the palm normal crossed
@@ -813,36 +768,37 @@ const [spinDeg, setSpinDeg] = useState(SPIN_DEG);
               across.normalize();
               poseBasis.makeBasis(armDir, across, faceDir);
             } else {
-              // No metric hand this frame, so hold the dial to the lens rather
-              // than guessing a twist out of the 2D landmarks. Keeps the watch
-              // usable if a build of the tracker omits the reconstruction.
+              // No metric hand this frame, so hold the back of the wrist to the
+              // lens rather than guessing a twist out of the 2D landmarks. Keeps
+              // the watch usable if a build of the tracker omits the
+              // reconstruction. Same frame, a flat normal.
               faceDir.copy(CAM_DIR).addScaledVector(armDir, -CAM_DIR.dot(armDir));
               if (faceDir.lengthSq() < 1e-8) {
                 faceDir.copy(wristNormal);
               }
               faceDir.normalize();
-              faceDir.multiplyScalar(1).addScaledVector(wristNormal, FACE_TIGHTNESS_TUNABLE);
-              if (faceDir.lengthSq() < 1e-8) {
-                faceDir.copy(CAM_DIR);
+              across.crossVectors(faceDir, armDir);
+              if (across.lengthSq() < 1e-8) {
+                across.set(-armDir.y, armDir.x, 0);
               }
-              faceDir.normalize();
-              across.crossVectors(armDir, faceDir).normalize();
-              faceDir.crossVectors(across, armDir).normalize();
-              poseBasis.makeBasis(across, armDir, faceDir);
+              across.normalize();
+              poseBasis.makeBasis(armDir, across, faceDir);
             }
-            watchQuat.setFromRotationMatrix(poseBasis);
-            // Applied last, in the model's own frame. The tilt leans the dial off
-            // the band, the facing turn swings it round to the lens, and the
-            // forearm turn then rolls it in plane.
-            if (tiltState.deg) watchQuat.multiply(tiltState.quat);
-            if (faceState.deg) watchQuat.multiply(faceState.quat);
-            if (spinState.deg) watchQuat.multiply(spinState.quat);
+            // Wrist frame first, then the seller's alignment inside it. That order
+            // is the whole point: the alignment is expressed in the canonical
+            // frame, so the frame is applied outside it and the model's own axes
+            // never enter the calculation.
+            watchQuat.setFromRotationMatrix(poseBasis).multiply(alignRef.current.quat);
             watchGroup.quaternion.slerp(watchQuat, 0.35);
 
-            // Seated on the skin on the side the lens can see.
-            watchGroup.position.copy(anchor).addScaledVector(faceDir, pose.armR);
+            // The seller's offset, in wrist widths, so one alignment fits any hand.
+            // Rotated by the final orientation, because "just off the skin" is a
+            // statement about the watch, not about the world.
+            watchGroup.position
+              .copy(anchor)
+              .addScaledVector(alignRef.current.offset.clone().applyQuaternion(watchQuat), pose.wristPx);
 
-            const pxPerModelWidth = (WATCH_WIDTH_FACTOR * pose.wristPx) / model.maxDim;
+            const pxPerModelWidth = ((WATCH_WIDTH_FACTOR * pose.wristPx) / model.maxDim) * alignRef.current.scale;
             watchGroup.scale.setScalar(pxPerModelWidth);
             const depth = Math.max(1e-6, model.maxDim * pxPerModelWidth) + 4;
             if (Math.abs(cam.far - depth) > 1e-3) {
@@ -953,60 +909,6 @@ const [spinDeg, setSpinDeg] = useState(SPIN_DEG);
               <button type="button" className="ar-exit" onClick={onExit}>
                 Exit
               </button>
-            </div>
-            <div className="ar-spin-row" role="group" aria-label="Dial facing">
-              <span className="ar-spin-label">Facing</span>
-              {[0, 90, 180, 270].map((deg) => (
-                <button
-                  key={deg}
-                  type="button"
-                  className={`ar-spin-btn${faceDeg === deg ? ' is-active' : ''}`}
-                  aria-pressed={faceDeg === deg}
-                  onClick={() => {
-                    faceState.deg = deg;
-                    faceState.quat.setFromAxisAngle(new THREE.Vector3(0, 0, 1), (deg * Math.PI) / 180);
-                    setFaceDeg(deg);
-                  }}
-                >
-                  {deg}°
-                </button>
-              ))}
-            </div>
-            <div className="ar-spin-row" role="group" aria-label="Watch orientation">
-              <span className="ar-spin-label">Forearm</span>
-              {[0, 90, 180, 270].map((deg) => (
-                <button
-                  key={deg}
-                  type="button"
-                  className={`ar-spin-btn${spinDeg === deg ? ' is-active' : ''}`}
-                  aria-pressed={spinDeg === deg}
-                  onClick={() => {
-                    spinState.deg = deg;
-                    spinState.quat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), (deg * Math.PI) / 180);
-                    setSpinDeg(deg);
-                  }}
-                >
-                  {deg}°
-                </button>
-              ))}
-            </div>
-            <div className="ar-spin-row" role="group" aria-label="Watch tilt">
-              <span className="ar-spin-label">Tilt</span>
-              {[-10, -5, 0, 5, 10, 15].map((deg) => (
-                <button
-                  key={deg}
-                  type="button"
-                  className={`ar-spin-btn${tiltDeg === deg ? ' is-active' : ''}`}
-                  aria-pressed={tiltDeg === deg}
-                  onClick={() => {
-                    tiltState.deg = deg;
-                    tiltState.quat.setFromAxisAngle(new THREE.Vector3(1, 0, 0), (deg * Math.PI) / 180);
-                    setTiltDeg(deg);
-                  }}
-                >
-                  {deg > 0 ? `+${deg}` : deg}°
-                </button>
-              ))}
             </div>
           </div>
         )}
