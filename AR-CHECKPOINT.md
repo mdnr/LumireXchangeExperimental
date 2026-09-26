@@ -40,8 +40,16 @@ for `e15aa93`.
 
 Known limitation: the model is 2.88 wrist widths from wrist to middle fingertip
 where an adult is nearer 3.4, so it reads slightly small. Every directional cue
-is correct, which is what the page needs. It has not been reviewed by eye yet,
-only asserted numerically.
+is correct, which is what the page needs.
+
+**Reviewed by eye on the live site and accepted by the user.** The hand reads
+better than the capsule version it replaced. What has *not* been retested since
+this change is the camera path: the align page was checked, but no product has
+been put through the rear-camera try-on with the new setup, so treat
+`ProductARScan` and `ProductAR` as untested against current sellers' saved
+alignments. A seller's alignment saved against the old placeholder hand is still
+valid, because the thumb stayed on +Y, but that has not been confirmed on a
+device either.
 
 To return to the earlier checkpoint:
 
