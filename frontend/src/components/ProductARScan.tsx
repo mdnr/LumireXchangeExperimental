@@ -16,10 +16,31 @@ interface ProductARScanProps {
 const MIN_WRIST_PX = 28;
 const WATCH_WIDTH_FACTOR = 1.0;
 const WATCH_ARM_OFFSET = 0.45;
+// The occluding proxy for the forearm. Its radius is a fraction of the tracked
+// wrist width: a wrist is a little over twice as wide as it is deep, so ~0.45
+// lands close to a real forearm. Too fat and the occluder eats the near half of
+// the watch, too thin and the far half leaks through. Both ends are tunable
+// with ?ar-arm= and ?ar-hand= if a device disagrees.
+const ARM_RADIUS_FACTOR = 0.45;
+const HAND_RADIUS_FACTOR = 0.52;
+// A forearm is noticeably wider across than it is deep, so the proxy capsule is
+// scaled into an ellipse rather than left circular.
+const ARM_WIDEN = 1.35;
+// How far the proxy reaches past the wrist in each direction, as a multiple of
+// the wrist width.
+const ARM_REACH = 7.5;
+const HAND_REACH = 3.2;
 const HOLD_MS = 350;
 const TRACK_MS = 110;
 const MEDIAPIPE_BASE = `${import.meta.env.BASE_URL}mediapipe/`;
 const DEBUG = new URLSearchParams(window.location.search).has('ar-debug');
+const PARAMS = new URLSearchParams(window.location.search);
+const numParam = (key: string, fallback: number) => {
+  const raw = Number.parseFloat(PARAMS.get(key) ?? '');
+  return Number.isFinite(raw) && raw > 0 ? raw : fallback;
+};
+const ARM_RADIUS_TUNABLE = numParam('ar-arm', ARM_RADIUS_FACTOR);
+const HAND_RADIUS_TUNABLE = numParam('ar-hand', HAND_RADIUS_FACTOR);
 // Which side of the wrist the watch sits on. Normally detected on the first
 // confident frame (assumed wrist-side-up, the way you would hold your arm out
 // to try a watch on). Override with ?ar-side=front if your first frame is
@@ -199,6 +220,22 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
     scene.add(wristAnchor);
     wristAnchor.add(watchGroup);
 
+    // The forearm and hand are rebuilt as proxy capsules every frame from the
+    // landmarks. Their material has colorWrite disabled, so they draw nothing:
+    // they only stamp the depth buffer. The watch then renders with an ordinary
+    // depth test, which means the arm clips the watch per pixel for free. The
+    // far side of the watch disappears behind the arm while the near side stays
+    // solid, exactly as a real watch behaves, with no transparency involved.
+    const occluderMaterial = new THREE.MeshBasicMaterial({ colorWrite: false });
+    const armProxy = new THREE.Mesh(new THREE.CapsuleGeometry(1, 1, 4, 16), occluderMaterial);
+    const handProxy = new THREE.Mesh(new THREE.CapsuleGeometry(1, 1, 4, 16), occluderMaterial);
+    armProxy.visible = false;
+    handProxy.visible = false;
+    armProxy.renderOrder = -1;
+    handProxy.renderOrder = -1;
+    scene.add(armProxy);
+    scene.add(handProxy);
+
     const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, -1, 10);
 
     const refreshSize = () => {
@@ -222,25 +259,34 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
       x: 0,
       y: 0,
       wristPx: 0,
-      // True when the watch face points away from the lens, which means the
-      // forearm sits between the camera and the watch and it must not be drawn.
+      // The arm axis in scene pixels. The watch and both occluder proxies are
+      // driven from this single frame, so the proxy can never drift a frame
+      // behind the watch and make the occlusion crawl along the silhouette.
+      axis: new THREE.Vector3(),
+      dir: new THREE.Vector3(0, 1, 0),
+      normal: new THREE.Vector3(0, 0, 1),
+      armR: 1,
+      handR: 1,
+      // Informational only: the occluder decides what is hidden, this just
+      // feeds the debug readout.
       far: false,
-      quat: new THREE.Quaternion(),
     };
     // The wrist frame is rebuilt from the 3D landmarks every frame: +x runs
     // along the forearm, +z is the outward face of the watch. Handing the model
     // a full basis instead of two screen-space angles is what lets a
     // palm-to-back flip swing the watch right around the arm.
-    const basis = new THREE.Matrix4();
     const vUp = new THREE.Vector3();
     const vRad = new THREE.Vector3();
     const vOut = new THREE.Vector3();
     const vX = new THREE.Vector3();
-    const vY = new THREE.Vector3();
     const vZ = new THREE.Vector3();
     const side = { sign: AR_SIDE === 'front' ? -1 : 1, decided: !!AR_SIDE, palm: 0 };
-    const occ = { v: 0 };
-    const watchMats: THREE.MeshStandardMaterial[] = [];
+    const anchor = new THREE.Vector3();
+    const armDir = new THREE.Vector3(0, 1, 0);
+    const armNormal = new THREE.Vector3(0, 0, 1);
+    const across = new THREE.Vector3(1, 0, 0);
+    const poseBasis = new THREE.Matrix4();
+    const watchQuat = new THREE.Quaternion();
     let cameraReady = false;
     let engineReady = false;
     let tracking = false;
@@ -315,21 +361,26 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
       const age = diag.lastMs ? Math.round(performance.now() - diag.lastMs) : -1;
       ctx.font = '12px system-ui, -apple-system, sans-serif';
       ctx.fillStyle = 'rgba(10, 10, 20, 0.6)';
-      ctx.fillRect(8, 8, 330, 80);
+      ctx.fillRect(8, 8, 330, 96);
       ctx.fillStyle = '#4dd0e1';
       ctx.fillText(`engine: ${diag.state}   video: ${d.vw}x${d.vh}`, 14, 24);
       ctx.fillText(`hands: ${diag.hands}   wrist: ${Math.round(diag.wristPx)}px   gl: ${glFrames}fr`, 14, 40);
       ctx.fillText(
-        `palm: ${side.palm > 0 ? 'at camera' : 'away'}   watch: ${pose.far ? 'occluded' : 'facing'}   side: ${side.sign > 0 ? 'dorsal' : 'palmar'}${AR_SIDE ? ' forced' : ''}`,
+        `palm: ${side.palm > 0 ? 'at camera' : 'away'}   watch: ${pose.far ? 'behind arm' : 'facing'}   side: ${side.sign > 0 ? 'dorsal' : 'palmar'}${AR_SIDE ? ' forced' : ''}`,
         14,
         56,
+      );
+      ctx.fillText(
+        `arm proxy: r=${Math.round(pose.armR)}px  hand r=${Math.round(pose.handR)}px  depth=${Math.round(cam.far)}px`,
+        14,
+        72,
       );
       ctx.fillText(
         diag.err
           ? `err: ${diag.err.slice(0, 42)}`
           : `last result: ${age >= 0 ? `${age}ms ago` : 'never'}   send time: ${diag.sendMs}ms`,
         14,
-        72,
+        88,
       );
     };
 
@@ -398,10 +449,12 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
             };
 
             // Landmark depth grows away from the lens while the ortho scene's
-            // depth grows toward it, so the frame is built in scene space and
-            // the z axis is negated once, here.
-            vUp.set(lx(9) - lx(0), ly(9) - ly(0), -(lz(9) - lz(0)));
-            vRad.set(lx(5) - lx(17), ly(5) - ly(17), -(lz(5) - lz(17)));
+            // depth grows toward it, and landmark y grows downward while scene y
+            // grows up, so the frame is built directly in scene space. z is
+            // normalised against image width like x is, so it takes the same
+            // aspect correction to land in a shared unit.
+            vUp.set(lx(9) - lx(0), -(ly(9) - ly(0)), -(lz(9) - lz(0)) * aspect);
+            vRad.set(lx(5) - lx(17), -(ly(5) - ly(17)), -(lz(5) - lz(17)) * aspect);
             vOut.crossVectors(vUp, vRad);
             if (vOut.lengthSq() < 1e-8) {
               lost();
@@ -426,9 +479,11 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
               return;
             }
             vZ.normalize();
-            vY.crossVectors(vZ, vX).normalize();
-            basis.makeBasis(vX, vY, vZ);
-            pose.quat.setFromRotationMatrix(basis);
+            pose.dir.copy(vX);
+            pose.normal.copy(vZ);
+            pose.axis.set(pose.x, -pose.y, -0.5);
+            pose.armR = ARM_RADIUS_TUNABLE * wristPx;
+            pose.handR = HAND_RADIUS_TUNABLE * wristPx;
             pose.far = vZ.z < 0;
             pose.visible = true;
             holdUntil = performance.now() + HOLD_MS;
@@ -512,14 +567,6 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
         fresh.position.set(-center.x, -center.y, -center.z);
         fresh.quaternion.identity();
         stripScanTextures(fresh);
-        // Kept so the watch can be faded out when the forearm occludes it.
-        watchMats.length = 0;
-        fresh.traverse((obj) => {
-          const mesh = obj as THREE.Mesh;
-          if (!mesh.isMesh) return;
-          const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-          for (const m of mats) watchMats.push(m as THREE.MeshStandardMaterial);
-        });
         model.sceneObj = fresh;
         watchGroup.add(fresh);
         model.cached = true;
@@ -565,30 +612,49 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
         }
         if (model.cached) {
           watchGroup.visible = pose.visible;
+          armProxy.visible = pose.visible;
+          handProxy.visible = pose.visible;
           if (pose.visible) {
-            watchGroup.position.x += (pose.x - watchGroup.position.x) * 0.45;
-            watchGroup.position.y += (-pose.y - watchGroup.position.y) * 0.45;
-            watchGroup.quaternion.slerp(pose.quat, 0.35);
-            // Fade the watch out instead of letting it draw straight over the
-            // forearm once it has rolled to the far side of the wrist. A soft
-            // fade reads as the arm passing in front of it, where a hard cut
-            // would look like a bug.
-            const occTarget = pose.far ? 1 : 0;
-            occ.v += (occTarget - occ.v) * 0.2;
-            const alpha = 1 - occ.v * 0.94;
-            for (const m of watchMats) {
-              m.opacity = alpha;
-              m.transparent = alpha < 0.98;
-              m.depthWrite = alpha > 0.5;
-            }
-            watchGroup.visible = alpha > 0.05;
+            // One smoothed frame drives the watch and both proxies. Smoothing
+            // them independently would let the proxy lag behind the watch and
+            // make the occlusion shimmer.
+            anchor.lerp(pose.axis, 0.45);
+            armDir.lerp(pose.dir, 0.45).normalize();
+            armNormal.lerp(pose.normal, 0.45).normalize();
+            // The outward normal has to stay square to the forearm or the watch
+            // shears as the wrist bends.
+            armNormal.projectOnPlane(armDir).normalize();
+            across.crossVectors(armDir, armNormal).normalize();
+            armNormal.crossVectors(across, armDir).normalize();
+            poseBasis.makeBasis(across, armDir, armNormal);
+            watchGroup.quaternion.slerp(watchQuat.setFromRotationMatrix(poseBasis), 0.35);
+
+            // Seated on the skin: the case is pushed out along the outward
+            // normal by the arm's own depth. Because that offset rides the
+            // normal, rolling the wrist carries the watch around to the far
+            // side of the arm, which is what puts it behind the proxy.
+            watchGroup.position.copy(anchor).addScaledVector(armNormal, pose.armR);
+
+            // A forearm is wider across than it is deep, so the proxy is
+            // elliptical. Both reach well past the wrist so the watch cannot
+            // slide off the end of the arm and lose its occluder.
+            const armLen = Math.max(2, ARM_REACH * pose.wristPx);
+            const handLen = Math.max(2, HAND_REACH * pose.wristPx);
+            armProxy.quaternion.setFromRotationMatrix(poseBasis);
+            armProxy.position.copy(anchor).addScaledVector(armDir, -armLen / 2);
+            armProxy.scale.set(pose.armR * ARM_WIDEN, Math.max(1, armLen - 2 * pose.armR), pose.armR);
+            handProxy.quaternion.setFromRotationMatrix(poseBasis);
+            handProxy.position.copy(anchor).addScaledVector(armDir, handLen / 2);
+            handProxy.scale.set(pose.handR * ARM_WIDEN, Math.max(1, handLen - 2 * pose.handR), pose.handR);
+
             const pxPerModelWidth = (WATCH_WIDTH_FACTOR * pose.wristPx) / model.maxDim;
             watchGroup.scale.setScalar(pxPerModelWidth);
-            const depth = Math.max(1e-6, model.maxDim * pxPerModelWidth);
-            const pad = depth + 4;
-            if (Math.abs(cam.far - pad) > 1e-3) {
-              cam.near = -pad;
-              cam.far = pad;
+            // The depth range has to clear the occluders, not just the watch, or
+            // the arm is clipped away exactly where the watch passes behind it.
+            const depth = Math.max(model.maxDim * pxPerModelWidth, armLen, handLen) + 6;
+            if (Math.abs(cam.far - depth) > 1e-3) {
+              cam.near = -depth;
+              cam.far = depth;
               cam.updateProjectionMatrix();
             }
             if (ringRef.current) {
@@ -599,7 +665,6 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
           } else if (ringRef.current) {
             ringRef.current.style.opacity = '0';
           }
-          wristAnchor.position.set(0, 0, -0.5);
         }
         try {
           renderer.render(scene, cam);
