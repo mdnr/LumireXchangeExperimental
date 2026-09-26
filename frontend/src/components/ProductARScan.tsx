@@ -447,7 +447,15 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
             // movement from there. Without this it would start life tilted, and
             // which way it started would depend on your hand and which side of
             // your wrist you happened to hold up.
-            if (rest.palm === null) rest.palm = palmFacing;
+            // The first confident frame sets the neutral pose, and the smoothed
+            // value starts there too. Starting it at zero instead would read as a
+            // full magnitude roll on the very first frame, swinging the watch to
+            // its stop and easing it back every time tracking locked on.
+            if (rest.palm === null) {
+              rest.palm = palmFacing;
+              pose.palm = palmFacing;
+              pose.face = 1;
+            }
             // Low-pass it. The raw signal is exact but the landmarks themselves
             // jitter, and a hard sign flip would snap the watch between sides.
             pose.palm += (palmFacing - pose.palm) * 0.25;
@@ -619,7 +627,12 @@ export function ProductARScan({ modelUrl, material, modelMaterials, revision, us
             if (across.lengthSq() < 1e-8) across.set(1, 0, 0);
             across.normalize();
             faceDir.copy(CAM_DIR).multiplyScalar(Math.cos(tilt)).addScaledVector(across, -Math.sin(tilt)).normalize();
-            armNormal.crossVectors(faceDir, armDir).normalize();
+            // makeBasis wants a right handed set, x cross y = z. With y = armDir
+            // and z = faceDir that forces x = armDir cross faceDir; using the
+            // reverse order yields a mirror, and a mirrored matrix is not a
+            // rotation, so deriving a quaternion from it produces a pose that
+            // drifts and flips as the wrist moves.
+            armNormal.crossVectors(armDir, faceDir).normalize();
             poseBasis.makeBasis(armNormal, armDir, faceDir);
             watchGroup.quaternion.slerp(watchQuat.setFromRotationMatrix(poseBasis), 0.35);
 
