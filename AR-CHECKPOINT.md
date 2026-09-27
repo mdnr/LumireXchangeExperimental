@@ -1206,7 +1206,34 @@ That is not a regression: at 1.75x the seller's `scale` of `0.85` was rendering
 the watch about a wrist and three quarters wide. If the size is wrong once it
 lands in the right place, the fix is `scale` in the studio, not this constant.
 
+`npm run verify:units` settles the "does this match the studio" question rather
+than leaving it to a device test. It reads the constants out of the real source
+and puts the studio and the camera side by side for one physical hand:
+
+| path | wrist measured | vs studio | offset applied |
+| --- | --- | --- | --- |
+| studio placeholder | `1.000000` | exact | `530.0px` |
+| camera, new | `1.000000` | **exact** | `530.0px` |
+| camera, old (palm length) | `1.7300` | x1.7300 | `916.9px` |
+
+The match is an identity, not a fitted number: the palm across the studio's
+scaled hand is `1.503145` units, and `1.503145 x 0.665272 = 1.000000`, because
+`0.665272` is `0.9061 / 1.362`, the exact inverse of the `1 / 0.9061` the studio
+scales the placeholder by. It also shows the old code was wrong about *size*, not
+just offset: it drew the watch at `1.73` wrist widths where the studio shows
+`0.85`. So the watch getting visibly smaller is the size finally matching, and
+if it is still the wrong size after this, the lever is the seller's `scale`.
+
+One number in that script is an estimate and is labelled as one:
+`PALM_LENGTH_OVER_WRIST_BREADTH = 1.73` comes from adult anatomy, not the mesh,
+because the mesh's X axis does not reproduce a real hand length (at the file's
+own ~6.4cm per unit its wrist-to-middle-tip run is 1.666 units, about 10.7cm,
+where a real hand is nearer 19cm). Its Z breadth is sound, which is why the
+wrist and palm breadths are taken from the mesh and the length ratio is not. It
+only sizes the "old" comparison row and cannot affect the pass or fail.
+
 Verified in the built bundle rather than trusted: the minifier left the division
+
 unfolded as `gl = hl/1.362` off `hl = .9061`, exported as `r`, imported into
 `ProductARScan` as `se` and applied as `dist(p5, p17) * se`, with the gate still
 `c < le` where `le = 28`. Note for next time: searching the bundle for the

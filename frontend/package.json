@@ -10,6 +10,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
+    "verify:units": "node scripts/verify-wrist-units.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
