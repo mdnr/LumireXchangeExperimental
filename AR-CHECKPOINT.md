@@ -2,35 +2,32 @@
 
 ## Resume here
 
-State as of `3326fc4`, pushed to `origin/dotnet-vite-app`. Live site
-https://mdnr.alwaysdata.net, serving `index-2GIQtWpS.js` /
-`ProductARScan-BdKfeX_w.js` / `ProductViewer-Dmv_-P1y.js` /
-`ProductAR-DVnOo4nZ.js`.
+State as of `3860ac3`, pushed to `origin/dotnet-vite-app`. Live site
+https://mdnr.alwaysdata.net, serving `index-Cmrlhevq.js` /
+`ProductARScan-CC9nr5mu.js` / `ProductViewer-BjUTZdvq.js` /
+`ProductAR-V8a3_VqG.js`.
 
 Everything below this block is background. The "Repo state right now" section
 further down predates the material work and is kept only as history.
 
-### Ask the user to retest placement, and read which way it fails
+### Ask the user to retest placement
 
-The wrist frame's sign no longer comes from the camera. See "The frame's sign
-came from the camera" below. Frontend only, so no restart is involved.
+The watch landing on the palm was **not** a wrist frame problem, it was the
+seller's offset being rotated by the seller's own rotation. See "The offset was
+being rotated by the seller's own rotation" below. Frontend only, no restart.
 
-`apple-watch-ultra`, rear camera, **left hand**. The user confirmed the left
-hand, which matters: that is the handedness the bundled reference hand is built
-for, so the anatomical frame and the studio frame are the same frame.
+`apple-watch-ultra`, rear camera, **left hand**. Hard refresh first: every asset
+name is new, so a cached bundle is the likeliest way to see a result that is
+already fixed.
 
-Hard refresh first. Every asset name is new, so a cached bundle is the likeliest
-way to see a result that is already fixed. What each outcome means:
+If it is still off, report *which* of these, because they are not
+interchangeable and the previous three sessions each assumed a different one:
 
-- on the wrist, dial out, matching the studio: done.
-- up the forearm, or down onto the knuckles: +X is still wrong.
-- dial facing the palm: +Z is inverted, the hand is being read as a right hand.
-- changes with how the wrist is held at first lock: a camera-relative sign
-  survives somewhere.
+- position wrong, orientation right -> the offset/rotation split
+- position and orientation both wrong -> the wrist frame
+- right at first lock, drifts after -> the smoothing on `anchor`/`armDir`
+- changes with how the wrist is held at first lock -> a camera-relative sign
 
-Do not change a constant in response to a placement complaint without asking
-which of those four it was. They have different causes and they are not
-interchangeable.
 
 ### For Clear, there is exactly one thing left to do and it is not a code change
 
@@ -603,6 +600,55 @@ runtime's `wrist` space via `WristHand` rather than deriving a frame from
 landmarks, so `CANONICAL_TO_WRIST_SPACE` is a separate and still unverified
 question.
 
+### The offset was being rotated by the seller's own rotation (`3860ac3`)
+
+**This was the actual cause of "the watch is on my palm", and it was never a
+frame problem.** Three sessions went into the wrist frame. The frame was fine.
+
+`ProductARScan.tsx` rotated the seller's offset by `watchQuat`:
+
+```ts
+watchQuat = basisQuat * sellerQuat          // orientation: correct
+position  = anchor + offset.applyQuaternion(watchQuat) * wristPx
+```
+
+The offset is already expressed in the canonical frame, so the basis is the only
+thing that needs applying. Folding `sellerQuat` in as well applied the seller's
+*model rotation* to their *model position*. Rotating a model about its own centre
+is not a thing that can move it, and this did exactly that.
+
+It stayed invisible for as long as alignments carried small rotations, then landed
+on `apple-watch-ultra`, whose saved quaternion is a half turn about
+`(0, 0.284, 0.959)`. A half turn about that axis maps canonical `+X` to `-1.000`
+on X:
+
+| canonical axis | under the seller's quat | |
+| --- | --- | --- |
+| `+X` toward the elbow | `(-1.000, 0.000, 0.000)` | **reversed** |
+| `+Z` out of the back of the hand | `(0.000, 0.545, 0.839)` | survives, `dot = +0.839` |
+
+So `offsetX 0.53` was applied as `-0.53`: straight back down the forearm onto the
+palm. And because Z survived, the dial kept facing the right way. "Off along X,
+still on my palm, facing correctly" is the exact fingerprint of this bug, and no
+amount of adjusting the wrist frame could ever have cured it.
+
+Fix: `basisQuat` is held separately and the offset uses it alone. The model's
+orientation keeps the seller's rotation; the model's position does not.
+
+**Lesson, and the general one:** a symptom that is *position wrong but orientation
+right* is not a frame bug. A frame bug moves both, because the frame is what
+defines both. Check which half of the transform is wrong before rebuilding the
+frame.
+
+### What to check if a placement complaint comes back
+
+Ask which of these it is, and do not change a constant without the answer:
+
+- position wrong, orientation right -> the offset/rotation split, as above
+- position and orientation both wrong -> the wrist frame
+- correct when first locked, drifts after -> the smoothing on `anchor`/`armDir`
+- changes with entry pose -> a camera-relative sign, which no longer exists
+
 ## The frame's sign came from the camera, so placement depended on entry pose
 
 `3326fc4`. This is the second half-turn bug, and the reason the first fix did not
@@ -1051,10 +1097,42 @@ Verified green locally (lint and build both exit 0) against `3326fc4`.
 | `71c063a` | `index-DrK9ZTUd.js` / `ProductViewer-BOadN-uJ.js` | Matte/Chrome/Clearcoat fixed, finish sliders 0-100 |
 | `27501af` | `index-DrK9ZTUd.js` / `ProductARScan-DLYJXtF2.js` | Clear opacity + forearm occluder. **Backend also uploaded by hand; needs the restart.** |
 | `d1e1288` | `ProductARScan-DLYJXtF2.js` | second, broad flat occluder for the hand |
-| `3326fc4` | `index-2GIQtWpS.js` / `ProductARScan-BdKfeX_w.js` / `ProductViewer-Dmv_-P1y.js` / `ProductAR-DVnOo4nZ.js` | **current, live.** wrist frame from the thumb |
+| `3326fc4` | `index-2GIQtWpS.js` / `ProductARScan-BdKfeX_w.js` / `ProductViewer-Dmv_-P1y.js` / `ProductAR-DVnOo4nZ.js` | wrist frame from the thumb, no camera sign |
+| `3860ac3` | `index-Cmrlhevq.js` / `ProductARScan-CC9nr5mu.js` / `ProductViewer-BjUTZdvq.js` / `ProductAR-V8a3_VqG.js` | **current, live.** offset rotated by the wrist basis only |
 
 Verified live after each upload, since the notes flag a missing
-`reference-hand.glb` as a past failure mode: `index.html` serves the new hashes
-and `/reference-hand.glb`, `ProductARScan-*.js`, `ProductAR-*.js` and
+`reference-hand.glb` as a past failure mode: `index.html` serves the new hashes,
+`/reference-hand.glb`, `ProductARScan-*.js`, `ProductAR-*.js` and
 `/api/products/apple-watch-ultra` all return 200. Static files only, so no
 Alwaysdata restart was needed for any row above.
+
+## The reference hand, measured rather than believed
+
+The measurements in `lib/referenceHand.ts` were re-derived from the mesh, not the
+rig bones, because the rig's bone node positions are **not** where the geometry
+is. A sweep of joint positions came back degenerate: `pinky - index` was exactly
+`(0, 0, 0)` and the chirality `0.000000`, because `IndexRoot`, `MiddleRoot` and
+`PinkyRoot` are all co-located at the wrist. The mesh carries a `scale` of `380`
+on node `Hand`, and the mesh accessor holds positions of about `+-0.004` in its
+own units, so nothing about the hand's real shape is legible without applying
+the world transform first.
+
+With the world transform applied, 1134 mesh vertices, and the documented constants
+confirmed:
+
+| quantity | documented | measured from mesh |
+| --- | --- | --- |
+| arm end | `x +1.166` | `x` max `+1.201` |
+| fingertip end | `x -1.211` | `x` min `-1.451` |
+| wrist breadth | `0.9061` | Z span at `x 0.40..0.55` = `0.906` |
+| thumb | `z -0.679` | outermost digit cluster `zMid -0.371`, mesh `z` min `-0.903` |
+| finger tips across Z | `-0.336 / -0.018 / +0.377 / +0.648` | clusters `-0.371 / -0.020 / +0.320 / +0.668` |
+
+Dorsal was checked separately, since it is the one axis with no self-evident
+sign: fingertips sit **below** their knuckles in model Y by `0.169` to `0.210`
+across three Z bands, and fingers curl toward the palm, so palm is `-Y` and the
+back of the hand is `+Y`. That is the assumption the whole frame rests on and it
+now rests on a measurement.
+
+So canonical `+X` is toward the elbow, confirmed, and the studio is correct. When
+the runtime disagreed with the studio, the studio was the one to believe.
