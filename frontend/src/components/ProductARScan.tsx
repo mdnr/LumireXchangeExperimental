@@ -89,55 +89,6 @@ function loadHandsLib(): Promise<HandModule> {
   return handsLibPromise;
 }
 
-function stripScanTextures(root: THREE.Object3D) {
-  const freq = new Map<number, number>();
-  root.traverse((obj) => {
-    const mesh = obj as THREE.Mesh;
-    if (!mesh.isMesh) return;
-    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-    for (const m of mats) {
-      const mat = m as THREE.MeshStandardMaterial;
-      const hex = mat.color.getHex();
-      const l = mat.color.r * 0.299 + mat.color.g * 0.587 + mat.color.b * 0.114;
-      if (hex !== 0xffffff && l < 0.95) freq.set(hex, (freq.get(hex) ?? 0) + 1);
-    }
-  });
-  const palette = [...freq.entries()].sort((a, b) => b[1] - a[1]).map((e) => e[0]);
-  const band = new THREE.Color(palette[0] ?? 0x26354a);
-  const body = new THREE.Color(palette[1] ?? 0xc8cdd5);
-  const accent = new THREE.Color(palette[Math.min(2, palette.length - 1)] ?? 0x98a1ab);
-  const face = new THREE.Color(0x0b1016);
-  root.traverse((obj) => {
-    const mesh = obj as THREE.Mesh;
-    if (!mesh.isMesh) return;
-    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-    for (const m of mats) {
-      const mat = m as THREE.MeshStandardMaterial;
-      mat.map = null;
-      mat.normalMap = null;
-      mat.roughnessMap = null;
-      mat.metalnessMap = null;
-      mat.aoMap = null;
-      mat.emissiveMap = null;
-      mat.alphaMap = null;
-      const name = `${mat.name} ${obj.name}`;
-      let color: THREE.Color;
-      if (/glass|screen|display|dial|face|lcd|tft|lenz/i.test(name)) {
-        color = face;
-      } else if (/band|strap|silicone|bracelet|nato|wrist|poly/i.test(name)) {
-        color = band;
-      } else if (/crown|button|knob|side/i.test(name)) {
-        color = accent;
-      } else {
-        color = body;
-      }
-      mat.color.copy(color);
-      mat.side = THREE.DoubleSide;
-      mat.needsUpdate = true;
-    }
-  });
-}
-
 function dist(a: { x: number; y: number }, b: { x: number; y: number }) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
@@ -681,6 +632,22 @@ export function ProductARScan({ modelUrl, material, modelMaterials, alignment, r
       .then(({ scene: modelScene, materials }) => {
         if (disposed) return;
         const fresh = modelScene.clone(true);
+        // The material the buyer picked, and nothing after it. This used to be
+        // followed by a pass that nulled every texture and repainted each part
+        // from a guess based on its name, which made this renderer disagree with
+        // the 3D viewer and the native AR view about what the product looks
+        // like. Three renderers, one material path.
+        //
+        // The name-based guess was also unsalvageable rather than merely
+        // imprecise. It looked for names like "band", "dial" and "crown" to
+        // decide which colour went where, and the models here are exported with
+        // obfuscated names: in pulse-smartwatch.glb not one node, mesh or
+        // material name out of 33 materials matches any of those patterns. So
+        // every part fell through to the same fallback, the whole watch came out
+        // one flat colour, and the eight textured materials lost their maps.
+        //
+        // If a look over a camera feed ever needs adjusting, change it in
+        // lib/modelMaterials.ts so all three renderers change together.
         applyProductMaterials(fresh, materials, material, modelMaterials);
         const box = new THREE.Box3().setFromObject(fresh);
         const size = new THREE.Vector3();
@@ -690,7 +657,6 @@ export function ProductARScan({ modelUrl, material, modelMaterials, alignment, r
         model.maxDim = Math.max(size.x, size.y, size.z) || 1;
         fresh.position.set(-center.x, -center.y, -center.z);
         fresh.quaternion.identity();
-        stripScanTextures(fresh);
         model.sceneObj = fresh;
         watchGroup.add(fresh);
         model.cached = true;

@@ -259,6 +259,54 @@ a per-renderer trim for it is a bug waiting to be rediscovered.
   arriving on the test phone.
 - **That the camera path honours a seller's saved alignment.** See the procedure
   below. This is the outstanding test.
+- **That the camera path shows the colour the buyer selected.** Found and fixed
+  on 27 Sep, from the user's report that AR did not match the selected colour.
+  The fix is verified by reading the code and the model, **not yet by eye on a
+  device**, so it still needs looking at.
+
+## The camera path ignored the selected colour, and every part of the model
+
+`ProductARScan` applied the product's material and then immediately undid it.
+The order in the loader was:
+
+```
+applyProductMaterials(fresh, materials, material, modelMaterials)   // the buyer's colour
+stripScanTextures(fresh)                                            // throws it away
+```
+
+`stripScanTextures` nulled `map`, `normalMap`, `roughnessMap`, `metalnessMap`,
+`aoMap`, `emissiveMap` and `alphaMap` on every material, then repainted each one
+from a colour guessed out of the model's own palette. The guess picked names off
+`${mat.name} ${obj.name}` and tested them against `dial|glass|screen|band|strap|
+crown|button|...` to decide which colour belonged to which part.
+
+**Those names do not exist in these models.** They are exported with obfuscated
+Sketchfab-style names, and in `pulse-smartwatch.glb` **not one** node, mesh or
+material name matches any of those patterns, out of 33 materials. Consequences,
+all of them verified by parsing the GLB rather than by eye:
+
+- every material fell through to the same fallback, so the whole watch was
+  painted one flat colour, `#695947`, a dark brown, taken from the second most
+  common colour in the file
+- 8 of the 33 materials have a `baseColorTexture`, and all 8 lost it
+- the near-black dial colour was never applied, because nothing matched `dial`
+
+So the camera AR view showed a flat brown, untextured lump for **every** product,
+whatever colour was selected, while the 3D viewer and the native WebXR view both
+showed the correct colour. `ProductViewer` and `ProductAR` never called it, which
+is why only the camera path was wrong and why the two AR modes disagreed with each
+other.
+
+Removed at `d18b081`'s successor rather than repaired: there is no correct version
+of a heuristic that keys off names the exporter does not emit. **Three renderers,
+one material path, in `lib/modelMaterials.ts`.** If a look over a camera feed ever
+needs changing, change it there so all three change together.
+
+Worth keeping as a method note, because it is the same shape of mistake as the
+bounding-box axis inference: a heuristic that reads a name or an extent and
+infers a property from it. Both looked reasonable, both were confidently wrong,
+and both were only caught by measuring the actual file rather than by looking at
+the screen and deciding it looked plausible.
 
 ## The camera-path device test
 
