@@ -490,6 +490,82 @@ runtime's `wrist` space via `WristHand` rather than deriving a frame from
 landmarks, so `CANONICAL_TO_WRIST_SPACE` is a separate and still unverified
 question.
 
+## Matte, Chrome and Clear did nothing, and the model file decided that
+
+All three finish controls were dead, not subtle. In `applyToMaterialInstance`:
+
+```ts
+const physical = mat as THREE.MeshPhysicalMaterial;
+if (physical.clearcoat !== undefined) {
+  physical.clearcoat = material.finish === 'chrome' ? 1 : material.clearcoat;
+  if (material.finish === 'chrome') physical.metalness = Math.max(mat.metalness, 0.85);
+}
+```
+
+That block is a duck-typed test for a property only `MeshPhysicalMaterial` has.
+Parsing `pulse-smartwatch.glb` rather than assuming:
+
+```
+extensionsUsed:              KHR_materials_emissive_strength
+KHR_materials_clearcoat:     absent
+all 33 materials:            metallicRoughness
+```
+
+`metallicRoughness` with no clearcoat extension means `GLTFLoader` builds every
+material as **`MeshStandardMaterial`**, which has no `clearcoat` property. So
+`physical.clearcoat !== undefined` was `false`, the block never ran, and:
+
+- the **Clear** slider did nothing
+- **Chrome** did nothing either, because its `metalness` line was *inside* the
+  same skipped block
+- so **Matte and Chrome rendered identically**, on every product whose model was
+  exported without `KHR_materials_clearcoat`
+
+Chrome was also wrong on its own terms where it did apply: it raised metalness and
+left roughness alone, and 0.85 metal at roughness 0.45 is a brushed satin, not
+chrome. Chrome needs both. It now sets `metalness >= 0.95` **and**
+`roughness <= 0.08`, plus `clearcoat >= 0.6` and `clearcoatRoughness 0.05`.
+
+A clear coat is a second specular lobe with its own roughness and cannot be faked
+by moving metalness and roughness on a standard material, so the honest fix is to
+swap the class: `promoteClearcoatMaterials` walks the scene graph and replaces each
+`MeshStandardMaterial` with a `MeshPhysicalMaterial` carrying the maps across.
+Three details that matter:
+
+- keyed on the **original** material in a `Map`, so a material shared by several
+  meshes is promoted once and stays shared rather than being cloned per mesh
+- guarded on `isMeshStandardMaterial && !isMeshPhysicalMaterial`, because
+  `isMeshStandardMaterial` is **also true** for `MeshPhysicalMaterial`. Without
+  the second half, every pass would promote an already-promoted material and
+  quietly reset its clear coat to 0
+- run **before** the paint and before the scene is read back for preset matching,
+  because it replaces the material objects and everything downstream has to see
+  the new ones
+
+The scene graph is walked rather than `materialMap`, for the same reason the
+preset matching reads it: the map is empty.
+
+The `isMeshStandardMaterial` and `isMeshPhysicalMaterial` flags sit on opposite
+sides of the class hierarchy, so `tsc` rejects reading both off
+`MeshStandardMaterial`. They are read off an intersection type instead. Worth
+remembering rather than rediscovering: `MeshPhysicalMaterial extends
+MeshStandardMaterial`, which is why the inherited flag is true for both.
+
+### The studio sliders read 0 to 1 and showed no number
+
+`Metal`, `Rough` and `Clear` were bare sliders over `0..1` with no value displayed,
+so `0.15` looked like a third of the way along and there was no way to tell what a
+part was set to. They now run `0..100` with the number shown, converting to and
+from `0..1` at the boundary, so a stored `1` reads `100` and sits at the end of the
+track — which is the complaint that surfaced it, on a part whose clear coat was
+already at maximum.
+
+`Metal` and `Rough` are **disabled and read "chrome"** while Chrome is selected,
+because Chrome overrides both. Leaving them live would show a number that is not
+what renders, which is the same class of bug as a control that lies: this whole
+session has been about controls that report something other than what they do.
+
+
 
 ## The camera-path device test
 

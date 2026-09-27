@@ -761,16 +761,51 @@ export function ProductFormPage() {
                         </select>
                       </label>
                       <label className="field part-slider">
-                        <span>Metal</span>
-                        <input type="range" min={0} max={1} step={0.01} value={m.material.metalness} onChange={(e) => setModelMaterial(m.index, { metalness: Number(e.target.value) })} />
+                        <span>
+                          Metal{' '}
+                          <span className="muted small">
+                            {m.material.finish === 'chrome' ? 'chrome' : Math.round(m.material.metalness * 100)}
+                          </span>
+                        </span>
+                        <input
+                          type="range"
+                          min={0}
+                          max={100}
+                          step={1}
+                          disabled={m.material.finish === 'chrome'}
+                          value={Math.round(m.material.metalness * 100)}
+                          onChange={(e) => setModelMaterial(m.index, { metalness: Number(e.target.value) / 100 })}
+                        />
                       </label>
                       <label className="field part-slider">
-                        <span>Rough</span>
-                        <input type="range" min={0} max={1} step={0.01} value={m.material.roughness} onChange={(e) => setModelMaterial(m.index, { roughness: Number(e.target.value) })} />
+                        <span>
+                          Rough{' '}
+                          <span className="muted small">
+                            {m.material.finish === 'chrome' ? 'chrome' : Math.round(m.material.roughness * 100)}
+                          </span>
+                        </span>
+                        <input
+                          type="range"
+                          min={0}
+                          max={100}
+                          step={1}
+                          disabled={m.material.finish === 'chrome'}
+                          value={Math.round(m.material.roughness * 100)}
+                          onChange={(e) => setModelMaterial(m.index, { roughness: Number(e.target.value) / 100 })}
+                        />
                       </label>
                       <label className="field part-slider">
-                        <span>Clear</span>
-                        <input type="range" min={0} max={1} step={0.01} value={m.material.clearcoat} onChange={(e) => setModelMaterial(m.index, { clearcoat: Number(e.target.value) })} />
+                        <span>
+                          Clear <span className="muted small">{Math.round(m.material.clearcoat * 100)}</span>
+                        </span>
+                        <input
+                          type="range"
+                          min={0}
+                          max={100}
+                          step={1}
+                          value={Math.round(m.material.clearcoat * 100)}
+                          onChange={(e) => setModelMaterial(m.index, { clearcoat: Number(e.target.value) / 100 })}
+                        />
                       </label>
                     </div>
                   </div>
