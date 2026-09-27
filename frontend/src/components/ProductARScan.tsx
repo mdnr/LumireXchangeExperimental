@@ -217,15 +217,66 @@ export function ProductARScan({ modelUrl, material, modelMaterials, alignment, r
     scene.add(wristAnchor);
     wristAnchor.add(watchGroup);
 
-    // Forearm occluder: invisible, but it writes depth, so the far half of the
-    // band is rejected behind it and the watch reads as going around the wrist
-    // rather than floating in front of it. Same trick as the native path's
-    // <DefaultXRHand model={{ colorWrite: false }} />, which is why native AR has
-    // always looked right here and the camera path did not.
+    // Forearm and hand occluders: invisible, but they write depth, so the far
+    // half of the band is rejected behind the arm and the watch reads as going
+    // around the wrist rather than floating in front of it. Same trick as the
+    // native path's <DefaultXRHand model={{ colorWrite: false }} />, which is why
+    // native AR has always looked right here and the camera path did not.
     //
-    // The radius is the whole argument. Camera on +z, wrist axis through the
-    // origin, band looping round at radius 0.5 wrist widths, case standing on the
-    // skin from 0.5 outward. A proxy of radius r then:
+    // Two proxies, because an arm and a hand are not one shape and a single
+    // capsule cannot be both. The forearm is round and narrow, the hand is broad
+    // and flat, and the hand is also much wider than the wrist: 1.36 wrist
+    // breadths against 1.0, from the same measurements that put the wrist at the
+    // origin in `lib/referenceHand.ts`. One round proxy wide enough for the hand
+    // would swallow the watch case on the forearm.
+    const OCCLUDER_R = 0.47;
+    // Extents along the arm in wrist widths, + toward the elbow, so the hand is
+    // at negative X. The forearm reaches a little past the watch, which sits at
+    // offsetX 0.37, and the hand stops short of it, which is what keeps the hand
+    // proxy from ever being able to clip the case.
+    const ARM_FROM = 0.9;
+    const ARM_TO = -0.4;
+    const HAND_FROM = -0.1;
+    const HAND_TO = -2.6;
+    // Full breadth and thickness of the hand, wrist widths, halved below. The
+    // palm is a slab, not a tube, and modelling it round is what makes a mask
+    // eat the band on the back of the hand.
+    const HAND_BREADTH = 1.36;
+    const HAND_THICKNESS = 0.56;
+    // A capsule is round in cross-section, and three.js has no squashed variant,
+    // so the hand is built as a plain cylinder. It is only ever a depth proxy, so
+    // it does not need rounded ends; the forearm does, because a flat cap there
+    // would show as a hard edge cutting the band.
+    const armGeo = new THREE.CapsuleGeometry(1, 1, 6, 20);
+    // Capsule axis is local Y by default; the wrist basis puts the arm on local
+    // X, so turn it once at build time rather than fighting a quaternion every
+    // frame. The cross-section then scales independently per axis, which is what
+    // lets the hand be broad and flat out of the same primitive.
+    armGeo.rotateZ(-Math.PI / 2);
+    // A unit capsule is 3 long (1 of body plus two unit caps) and 1 across, while
+    // a unit cylinder is 1 long. Dividing the capsule down to 1 makes every
+    // number below mean the same thing for both proxies: length along the arm,
+    // and a radius across.
+    armGeo.scale(1 / 3, 1, 1);
+    const handGeo = new THREE.CylinderGeometry(1, 1, 1, 20, 1, false);
+    handGeo.rotateZ(-Math.PI / 2);
+    // colorWrite false with depthWrite left on: drawn, but paints nothing.
+    const occluderMat = new THREE.MeshBasicMaterial({ colorWrite: false });
+    const armOccluder = new THREE.Mesh(armGeo, occluderMat);
+    const handOccluder = new THREE.Mesh(handGeo, occluderMat);
+    for (const m of [armOccluder, handOccluder]) {
+      // Depth first, so even a see-through watch sorts against the arm.
+      m.renderOrder = -1;
+      m.visible = false;
+      // Rescaled every frame, so bounds mean nothing to the frustum test.
+      m.frustumCulled = false;
+      scene.add(m);
+    }
+
+    // The radius is the whole argument for the forearm, and it is not a matter of
+    // taste. Camera on +z, wrist axis through the origin, band looping round at
+    // radius 0.5 wrist widths, case standing on the skin from 0.5 outward. For a
+    // proxy of radius r:
     //   near band (z = +0.5)  hidden only if r > 0.5   -> stay visible if r < 0.5
     //   far band  (z = -0.5)  hidden whenever r < 0.5
     //   case      (z >= 0.5)  hidden only if r > 0.5   -> stay visible if r < 0.5
@@ -233,26 +284,23 @@ export function ProductARScan({ modelUrl, material, modelMaterials, alignment, r
     // else. That is why this is 0.47 and not "as big as the wrist looks": the
     // earlier attempt was oversized, took a bite out of the case, and got the
     // whole idea written off as unusable.
-    const OCCLUDER_R = 0.47;
-    // Extents along the arm, in wrist widths, from the wrist landmark. The band
-    // reaches past the wrist bone toward the elbow, so the elbow side is longer.
-    const OCCLUDER_BACK = 0.9;
-    const OCCLUDER_FWD = 0.4;
-    const ARM_UP = new THREE.Vector3(0, 1, 0);
-    const wristOccluder = new THREE.Mesh(
-      // Unit capsule, scaled per frame. The caps deform into ellipsoids under a
-      // non-uniform scale, which is invisible here and cheaper than rebuilding
-      // geometry every frame.
-      new THREE.CapsuleGeometry(1, 1, 6, 20),
-      // colorWrite false with depthWrite left on: drawn, but paints nothing.
-      new THREE.MeshBasicMaterial({ colorWrite: false }),
-    );
-    // Depth first, so even a see-through watch sorts against the arm.
-    wristOccluder.renderOrder = -1;
-    wristOccluder.visible = false;
-    // Rescaled every frame, so its bounds mean nothing to the frustum test.
-    wristOccluder.frustumCulled = false;
-    scene.add(wristOccluder);
+    //
+    // The hand proxy has no such constraint, because it never overlaps the watch
+    // in X at all. It is free to be the size of a hand.
+    const placeOccluder = (
+      m: THREE.Mesh,
+      fromX: number,
+      toX: number,
+      halfBreadth: number,
+      halfThickness: number,
+    ) => {
+      const px = pose.wristPx;
+      m.position.copy(anchor).addScaledVector(armDir, ((fromX + toX) / 2) * px);
+      m.quaternion.setFromRotationMatrix(poseBasis);
+      m.scale.set((fromX - toX) * px, halfBreadth * px, halfThickness * px);
+      m.visible = true;
+    };
+
 
     // Axis probe. The watch is parented here and the model is recentred on its
     // own bounding box, so the group origin is the model centre and an arrow
@@ -871,22 +919,19 @@ export function ProductARScan({ modelUrl, material, modelMaterials, alignment, r
             const pxPerModelWidth = ((WATCH_WIDTH_FACTOR * pose.wristPx) / model.maxDim) * alignRef.current.scale;
             watchGroup.scale.setScalar(pxPerModelWidth);
 
-            // Occluder last, from the same frame and the same wrist width, so it
-            // can never lag the watch by a frame and make the cut crawl along the
-            // silhouette. Sized off pose.wristPx rather than the seller's scale:
-            // it stands in for the wearer's arm, which the watch alignment has no
-            // business resizing.
-            const occR = OCCLUDER_R * pose.wristPx;
-            wristOccluder.position
-              .copy(anchor)
-              .addScaledVector(armDir, ((OCCLUDER_BACK - OCCLUDER_FWD) / 2) * pose.wristPx);
-            wristOccluder.quaternion.setFromUnitVectors(ARM_UP, armDir);
-            wristOccluder.scale.set(
-              occR,
-              Math.max(1e-6, (OCCLUDER_BACK + OCCLUDER_FWD) * pose.wristPx - 2 * occR),
-              occR,
+            // Occluders last, from the same frame and the same wrist width, so
+            // they can never lag the watch by a frame and make the cut crawl
+            // along the silhouette. Sized off pose.wristPx rather than the
+            // seller's scale: they stand in for the wearer's arm, which the watch
+            // alignment has no business resizing.
+            placeOccluder(armOccluder, ARM_FROM, ARM_TO, OCCLUDER_R, OCCLUDER_R);
+            placeOccluder(
+              handOccluder,
+              HAND_FROM,
+              HAND_TO,
+              HAND_BREADTH / 2,
+              HAND_THICKNESS / 2,
             );
-            wristOccluder.visible = true;
             const depth = Math.max(1e-6, model.maxDim * pxPerModelWidth) + 4;
             if (Math.abs(cam.far - depth) > 1e-3) {
               cam.near = -depth;
@@ -901,7 +946,8 @@ export function ProductARScan({ modelUrl, material, modelMaterials, alignment, r
           } else {
             // A left-behind occluder would keep cutting the watch out of a frame
             // where the hand is already gone.
-            wristOccluder.visible = false;
+            armOccluder.visible = false;
+            handOccluder.visible = false;
             if (ringRef.current) ringRef.current.style.opacity = '0';
           }
         }
