@@ -26,11 +26,26 @@ const MIN_WRIST_PX = 28;
 const HOLD_MS = 350;
 const TRACK_MS = 110;
 // Where along the forearm the watch's origin is seated, in wrist widths, measured
-// from the wrist landmark toward the middle of the palm. This is the tracker's
-// own geometry and says nothing about the model, which is why it survives the
-// removal of the orientation guessing: the hand landmarks are fixed points, so
-// this only decides which point the model is hung from.
-const WATCH_ARM_OFFSET = 0.45;
+// from the wrist landmark. This is the tracker's own geometry and says nothing
+// about the model, which is why it survives the removal of the orientation
+// guessing: the hand landmarks are fixed points, so this only decides which
+// point the model is hung from.
+//
+// It is 0, and it has to be. The align page seats the reference hand's wrist
+// centre exactly on the origin, and says so, precisely so that a number typed
+// there means the same thing on any hand and on any device. A seller's offset is
+// therefore read from the wrist, and a runtime that quietly seats the origin
+// 0.45 wrist widths further up the forearm makes every one of those numbers mean
+// something else here, by an amount nobody can see and no seller can correct.
+//
+// This used to be 0.45, with a comment claiming it measured "from the wrist
+// landmark toward the middle of the palm" while the code moved the anchor the
+// other way, away from the palm and down the forearm. So the comment and the
+// code disagreed, the code was the anatomically correct one, and both were wrong
+// about the thing that actually mattered: neither matched the page the number is
+// typed on. Placement now belongs to the seller's alignment, which is stated once
+// and is the same number everywhere.
+const WATCH_ARM_OFFSET = 0;
 const MEDIAPIPE_BASE = `${import.meta.env.BASE_URL}mediapipe/`;
 const DEBUG = new URLSearchParams(window.location.search).has('ar-debug');
 const USDZ_POSTER =
@@ -503,7 +518,27 @@ export function ProductARScan({ modelUrl, material, modelMaterials, alignment, r
             // grows up, so the frame is built directly in scene space. z is
             // normalised against image width like x is, so it takes the same
             // aspect correction to land in a shared unit.
-            vUp.set(lx(9) - lx(0), -(ly(9) - ly(0)), -(lz(9) - lz(0)) * aspect);
+            //
+            // Wrist minus middle knuckle, so this points up the forearm. It used
+            // to be the other way round, knuckle minus wrist, which points at the
+            // fingertips: the exact opposite of the frame's +X. Landmarks 9 and 0
+            // are the middle finger's base knuckle and the wrist crease, so the
+            // subtraction is the whole of the difference.
+            //
+            // The inversion is invisible in isolation and expensive in practice.
+            // `lib/referenceHand.ts` records, from measurements of the bundled hand
+            // rather than by eye, that the studio's +X runs from the fingertips
+            // toward the elbow: the arm end sits at x +1.166 and the middle
+            // fingertip at x -1.211. So a seller's +X offset was being applied
+            // toward the fingers here, putting a watch the studio placed 0.37
+            // wrist widths up the forearm onto the back of the hand towards the
+            // knuckles at runtime, with nothing for the seller to see and fix.
+            //
+            // Flipping this also repairs +Y, which is worth more than it looks:
+            // `across` is derived from this axis, and because the frame is right
+            // handed a correct X and Z force a correct Y. Only X was wrong, so
+            // only X had to be touched.
+            vUp.set(lx(0) - lx(9), -(ly(0) - ly(9)), -(lz(0) - lz(9)) * aspect);
             vRad.set(lx(5) - lx(17), -(ly(5) - ly(17)), -(lz(5) - lz(17)) * aspect);
             vOut.crossVectors(vUp, vRad);
             if (vOut.lengthSq() < 1e-8) {
@@ -548,7 +583,15 @@ export function ProductARScan({ modelUrl, material, modelMaterials, alignment, r
               const wx = (i: number) => wl[i].x;
               const wy = (i: number) => -wl[i].y;
               const wz = (i: number) => -wl[i].z;
-              wArm.set(wx(9) - wx(0), wy(9) - wy(0), wz(9) - wz(0));
+              // Wrist minus middle knuckle, so +X runs up the forearm toward the
+              // elbow and matches the frame the seller aligned against. This was
+              // knuckle minus wrist, which points at the fingertips, so the whole
+              // frame sat in a half turn about Z: the seller's +X offset pushed
+              // the watch toward the fingers instead of toward the elbow, and
+              // their rotation was applied a half turn out. One subtraction, and
+              // the runtime frame agrees with `lib/referenceHand.ts`, which is
+              // measured from the bundled hand rather than assumed.
+              wArm.set(wx(0) - wx(9), wy(0) - wy(9), wz(0) - wz(9));
               // Index knuckle to ring knuckle, across the palm.
               wAcross.set(wx(13) - wx(5), wy(13) - wy(5), wz(13) - wz(5));
               if (wArm.lengthSq() > 1e-8 && wAcross.lengthSq() > 1e-8) {

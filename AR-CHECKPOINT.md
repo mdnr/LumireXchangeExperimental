@@ -404,6 +404,92 @@ Verified in the built chunk rather than assumed: the minified output contains th
 `isMesh` traversal that builds the name-keyed map. Not yet confirmed by eye on a
 device, and the notes say so.
 
+## The camera frame was in a half turn about Z, so a seller's position meant nothing
+
+Symptom, after the colour was finally right: the watch sat at the **top of the back
+of the palm**, up by the knuckles, when the seller had placed it correctly in the
+studio. Placement, not orientation, which is what made it look like a tuning problem
+rather than a contract problem.
+
+There were two independent mismatches, and both had to be wrong for the watch to
+land there.
+
+### 1. The arm axis pointed the wrong way
+
+`lib/wristAlignment.ts` states the frame: **+X up the forearm, toward the elbow**.
+`lib/referenceHand.ts` backs that with measurements taken out of the bundled hand
+rather than by eye, which is what makes it usable as a reference:
+
+```
+HandMain        x = +1.166   the arm end
+MiddleF_tip     x = -1.211   the fingertip end
+=> +X runs from the fingertips toward the elbow, matching the frame's +X.
+```
+
+The camera path built that axis the other way round, in **both** the 2D and the
+metric branch:
+
+```ts
+vUp.set(lx(9) - lx(0), ...);              // middle knuckle minus wrist  -> fingertips
+wArm.set(wx(9) - wx(0), ...);             // same
+```
+
+Landmark 9 is the middle finger's base knuckle and landmark 0 the wrist crease, so
+that subtraction points from the wrist at the fingers: exactly backwards. One
+subtraction, in two places.
+
+The consequence is bigger than an offset being mirrored. With X reversed and Z
+correct, and `across` derived from the arm axis, the runtime basis came out as
+`(−X̂, −Ŷ, Ẑ)` against a canonical `(X̂, Ŷ, Ẑ)` — a **half turn about Z**. So:
+
+- the seller's `offsetX` of `+0.37`, "up the forearm" in the studio, was applied
+  *toward the fingers* here, which is the reported symptom exactly
+- the seller's rotation was also applied a half turn out, so the crown and band
+  were on the wrong sides too, and being a half turn about the wrist normal it is
+  not the kind of error that reads as obviously wrong
+
+Only X was wrong, and that is all that had to be fixed: because the frame is right
+handed, `across = faceDir × armDir` means a correct X and Z **force** a correct Y.
+There was no third axis to go and get right separately.
+
+### 2. The runtime origin did not match the page the number is typed on
+
+`ReferenceHandModel.tsx` seats the reference hand's wrist centre exactly on the
+origin, and says why: so that a number typed on the align page means the same thing
+on any hand and any device. The camera path instead seated the origin `0.45` wrist
+widths further up the forearm than the wrist landmark, on top of the seller's
+offset. So even with a correct frame, every seller's number meant something about
+`0.45` wrist widths, roughly 2.7cm on a 60mm wrist, different from what they typed.
+
+`WATCH_ARM_OFFSET` is now `0`, and placement belongs to the seller's alignment,
+which is stated once and is the same number everywhere.
+
+Its comment was also wrong, and in a way worth recording: it claimed the offset was
+measured "from the wrist landmark toward the middle of the palm" while the code
+moved the anchor the *other* way, away from the palm and down the forearm. The code
+was the anatomically correct one and the comment was stale, and both were wrong
+about the thing that mattered — neither matched the page the number is typed on.
+
+### Not verified on a device
+
+Untested by eye, and the notes say so. Two things to expect when it is:
+
+- **`roll.deg` now reads with the opposite sign**, about `+65` where it read `-65`.
+  Same measurement, opposite sense, because the sense of rotation about the arm axis
+  follows the axis. The `3D` marker is unaffected and still means the metric
+  reconstruction is arriving. The `-65deg 3D` quoted above was read under the old
+  convention, so it should not be compared against a new reading without allowing
+  for the flip.
+- The dial orientation should improve rather than change for the worse, since the
+  seller's rotation is now applied in the frame it was authored in. If it looks
+  rotated, that is now a genuine misalignment to fix in the studio, because the two
+  now agree about what the frame is.
+
+The native WebXR path is untouched by this and was not affected: it binds to the
+runtime's `wrist` space via `WristHand` rather than deriving a frame from
+landmarks, so `CANONICAL_TO_WRIST_SPACE` is a separate and still unverified
+question.
+
 
 ## The camera-path device test
 
