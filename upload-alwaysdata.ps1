@@ -58,23 +58,31 @@ Write-Host "Uploading $($roots.Count) root files and $($assets.Count) assets" -F
 $lines | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
 
 # SSH_ASKPASS_REQUIRE=force is what makes this work with no TTY at all.
-$askpass = Join-Path $env:TEMP 'opencode\ad-askpass.cmd'
-$sshArgs = @('-o', 'StrictHostKeyChecking=accept-new', '-b', $batch)
+#
+# Every -o must come BEFORE -b. sftp handles -b inline while it is still parsing
+# arguments: it opens the connection there and then, so a later -o has not taken
+# effect yet. With BatchMode=no after -b, the connection is made with the default
+# BatchMode=yes, which suppresses password and askpass prompting entirely, and the
+# upload dies with "Permission denied" on a password that is perfectly correct.
+# Put -o first and the option is applied before anything connects.
+$ask = Join-Path $env:TEMP 'opencode\ad-askpass.cmd'
+$sshArgs = @('-o', 'StrictHostKeyChecking=accept-new')
 if ($useKey) {
   # BatchMode=yes, so a key that is not yet registered fails immediately with a
   # permission error instead of silently falling back to prompting for a
   # password that nothing is there to answer.
   $sshArgs += @('-i', $IdentityFile, '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes')
 } else {
-  Set-Content -LiteralPath $askpass -Encoding ASCII -Value @(
+  Set-Content -LiteralPath $ask -Encoding ASCII -Value @(
     '@echo off',
     "type `"$PasswordFile`""
   )
-  $env:SSH_ASKPASS = $askpass
+  $env:SSH_ASKPASS = $ask
   $env:SSH_ASKPASS_REQUIRE = 'force'
   $env:DISPLAY = 'alwaysdata'
-  $sshArgs += '-o', 'BatchMode=no'
+  $sshArgs += @('-o', 'BatchMode=no')
 }
+$sshArgs += @('-b', $batch)
 
 try {
   & sftp @sshArgs $Remote
@@ -82,7 +90,7 @@ try {
 } finally {
   # The password is on disk for as short a time as possible.
   Remove-Item -LiteralPath $PasswordFile -Force -ErrorAction SilentlyContinue
-  Remove-Item -LiteralPath $askpass -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $ask -Force -ErrorAction SilentlyContinue
   Remove-Item Env:\SSH_ASKPASS, Env:\SSH_ASKPASS_REQUIRE, Env:\DISPLAY -ErrorAction SilentlyContinue
 }
 

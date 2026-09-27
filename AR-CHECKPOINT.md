@@ -345,6 +345,27 @@ a password file otherwise. It prefers the key, because the private key never
 leaves `~/.ssh` and there is no secret to copy around. It is generated but **not
 yet registered** on the account, so deploys are still using the password.
 
+**Pass `-ForcePassword` until the key is registered.** The key file exists, so
+without that switch the script takes the key path, fails with `BatchMode=yes`,
+and never reaches the password. The resulting error names a public-key problem
+when the real issue is only that the password path was skipped.
+
+**Every `-o` must come before `-b` in the sftp call.** This cost a deploy and is
+worth not re-deriving. `sftp` handles `-b <batchfile>` inline while it is still
+parsing arguments, opening the connection there and then, so any `-o` after it
+has not taken effect when the connection is made. With `BatchMode=no` placed
+after `-b`, the connection is made under the default `BatchMode=yes`, which
+suppresses password and askpass prompting completely, and the upload dies with:
+
+```
+mdnr@ssh-mdnr.alwaysdata.net: Permission denied (publickey,password,keyboard-interactive).
+```
+
+That message reads like a wrong or unregistered credential, and it is not: the
+password was correct and the same command with the same batch file succeeded
+once the two options were swapped. Confirmed by running both orders against the
+same account. The script now builds every `-o` first and appends `-b` last.
+
 The password is read from `%TEMP%\opencode\ad-pass.txt` and deleted afterwards,
 so it never sits in a command line or in the repo. Create that file first:
 
@@ -352,11 +373,28 @@ so it never sits in a command line or in the repo. Create that file first:
 Set-Content -LiteralPath "$env:TEMP\opencode\ad-pass.txt" -Value '<password>' -NoNewline
 ```
 
+`-NoNewline` matters: the askpass helper `type`s the file, and a trailing
+newline comes back as part of the password.
+
 **Preserve on the server:** `/home/mdnr/www/app.db`, `wwwroot/models/`, and
 remotely uploaded `wwwroot/images/`. Nothing is ever deleted by the upload, which
 is what keeps these safe. Stale hashed assets do accumulate on the server; they
-are harmless, since `index.html` only references the current ones. The database
-backup is at `%TEMP%/opencode/app.db.backup`.
+are harmless, since `index.html` only references the current ones.
+
+**Take a database backup before deploying**, since a deploy can bring a migration
+with it. Pulled with a one-line sftp batch, because the upload script only ever
+puts files and cannot be used to fetch:
+
+```
+lcd %TEMP%\opencode
+get /home/mdnr/www/app.db app.db.predeploy.bak
+bye
+```
+
+The pre-`ca31d1b` deploy backup is at `%TEMP%/opencode/app.db.predeploy.bak`
+(262144 bytes, matching the live file). An older one is at
+`%TEMP%/opencode/app.db.backup`.
+
 
 ## Credentials
 
@@ -416,6 +454,19 @@ Alwaysdata's published fingerprint if the account is ever rebuilt.
 | `e15aa93` | `index-C8LPQc_P.js` | **bundled rigged hand, no bangle, rotation sliders. Current, live.** |
 
 Verified green locally (build and lint both exit 0) against `e15aa93`, which is
-what the live site serves. Removing the dead `.ar-spin-*` CSS in the commit that
+what the live site served. Removing the dead `.ar-spin-*` CSS in the commit that
 touched this section changes the asset hashes, so the next deploy will publish
 new filenames; nothing about that is a behaviour change.
+
+## Deploy log
+
+| commit | assets | note |
+| --- | --- | --- |
+| `e15aa93` | `index-C8LPQc_P.js` / `index-BwFrOMB7.css` | was live until 27 Sep |
+| `ca31d1b` | `index-CvB__2NS.js` / `index-mcnVgCeH.css` | **current, live.** dead CSS removed, no behaviour change |
+
+Verified live after the `ca31d1b` upload, since the notes flag a missing
+`reference-hand.glb` as a past failure mode: `index.html` serves the new
+hashes, and `/reference-hand.glb`, `ProductARScan-O4WeZbSO.js`,
+`ProductAR-C85-hmh4.js` and `/api/products/apple-watch-ultra` all return 200.
+Static files only, so no Alwaysdata restart was needed.
