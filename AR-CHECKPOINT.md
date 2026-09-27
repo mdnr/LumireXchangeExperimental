@@ -2,14 +2,37 @@
 
 ## Resume here
 
-State as of `27501af`, pushed to `origin/dotnet-vite-app`. Live site
-https://mdnr.alwaysdata.net, serving `index-wcQLA_qM.js` /
-`ProductARScan-Cy_vvqbE.js` / `ProductViewer-9zIgUhFL.js`.
+State as of `3326fc4`, pushed to `origin/dotnet-vite-app`. Live site
+https://mdnr.alwaysdata.net, serving `index-2GIQtWpS.js` /
+`ProductARScan-BdKfeX_w.js` / `ProductViewer-Dmv_-P1y.js` /
+`ProductAR-DVnOo4nZ.js`.
 
 Everything below this block is background. The "Repo state right now" section
 further down predates the material work and is kept only as history.
 
-### There is exactly one thing left to do, and it is not a code change
+### Ask the user to retest placement, and read which way it fails
+
+The wrist frame's sign no longer comes from the camera. See "The frame's sign
+came from the camera" below. Frontend only, so no restart is involved.
+
+`apple-watch-ultra`, rear camera, **left hand**. The user confirmed the left
+hand, which matters: that is the handedness the bundled reference hand is built
+for, so the anatomical frame and the studio frame are the same frame.
+
+Hard refresh first. Every asset name is new, so a cached bundle is the likeliest
+way to see a result that is already fixed. What each outcome means:
+
+- on the wrist, dial out, matching the studio: done.
+- up the forearm, or down onto the knuckles: +X is still wrong.
+- dial facing the palm: +Z is inverted, the hand is being read as a right hand.
+- changes with how the wrist is held at first lock: a camera-relative sign
+  survives somewhere.
+
+Do not change a constant in response to a placement complaint without asking
+which of those four it was. They have different causes and they are not
+interchangeable.
+
+### For Clear, there is exactly one thing left to do and it is not a code change
 
 **Restart the site in the Alwaysdata admin panel.** Then the migration runs at
 startup, adds `Material_Transparency`, and the Clear slider starts working.
@@ -32,14 +55,22 @@ Rollback, should the restart surface a problem: the pre-upload DLL is at
 
 ### What is already live and testable without any restart
 
-The forearm occluder is frontend only, so the "I can see the back strap inside
-the watch" fix is on the site right now. Test `apple-watch-ultra` in camera AR
-before restarting anything, since that is the only product with a saved alignment.
+Two occluders are frontend only, so both are on the site right now. The forearm
+capsule hides the back strap inside the watch, and a second broad flat proxy
+covers the hand, so the watch reads as worn rather than floating.
 
-If the strap is still visible, `OCCLUDER_R` in `ProductARScan.tsx` is too small.
-If the case loses a rim or a bite out of the dial, it is too big. It is `0.47` and
-the reasoning for that exact value is in the occlusion section below. One number,
-one redeploy, no server involvement.
+Test `apple-watch-ultra` in camera AR before restarting anything, since that is
+the only product with a saved alignment.
+
+Two numbers, both in `ProductARScan.tsx`, and neither needs the server:
+
+- `OCCLUDER_R` is `0.47` for the forearm. Too small and the strap leaks, too
+  big and the case loses a rim or a bite out of the dial.
+- `HAND_BREADTH` is `1.36` and `HAND_THICKNESS` is `0.56` for the hand. Too
+  small and the watch draws over the knuckles, too big and the mask eats the
+  case.
+
+One number, one redeploy, no server involvement.
 
 ### Deploy mechanics that were wrong here and cost real time
 
@@ -572,6 +603,85 @@ runtime's `wrist` space via `WristHand` rather than deriving a frame from
 landmarks, so `CANONICAL_TO_WRIST_SPACE` is a separate and still unverified
 question.
 
+## The frame's sign came from the camera, so placement depended on entry pose
+
+`3326fc4`. This is the second half-turn bug, and the reason the first fix did not
+stick. The earlier section above got the arm axis pointing the right way. What
+was still wrong is that the frame's **sign** was not anatomical at all.
+
+Both paths used to decide the sign once, on the first tracked frame, against
+whichever side of the wrist faced the lens:
+
+```ts
+roll.sign = wNormal.dot(CAM_DIR) >= 0 ? 1 : -1;   // metric
+side.sign = vOut.z > 0 ? 1 : -1;                  // 2D
+```
+
+Deciding once was deliberate, to stop the watch spinning as the roll passed
+through zero. But it means the frame a seller's alignment is interpreted in
+depends on the pose at the moment tracking engaged. Same wrist, different entry
+pose, different placement, and nothing on screen to explain it.
+
+### Why the cross product could not just be used as it stood
+
+The metric path built `+Z` as `wArm x wAcross`, where `wAcross` ran index
+knuckle to ring knuckle, i.e. *away* from the thumb, i.e. canonical `-Y`. For a
+left hand that comes out at `-Z`: the palm, not the back of the hand. Verified
+numerically against a synthetic left hand in the studio's own frame, the old
+product is exactly `(0, 0, -1)`, dot `-1.000` with the dorsal axis. A camera sign
+was therefore not a convenience, it was load-bearing.
+
+The fix is to take `+Y` from the thumb's own landmarks, `1 -> 4`, projected
+perpendicular to `+X`. The thumb is the one axis of the palm that is *named*
+rather than inferred, so no sign has to be guessed and nothing references the
+camera. `+Z` is then `+X x +Y`.
+
+### The handedness, worked out rather than picked
+
+This is the one bit that cannot be read off the code, and it is worth recording
+because it was the thing that had to be asked rather than guessed.
+
+From the measured values in `lib/referenceHand.ts` for the bundled hand: elbow
+end at `x +1.166`, middle fingertip at `x -1.211`, thumb on model `-Z`, back of
+the hand on model `+Y`. So the studio's canonical frame is `+X` toward the elbow,
+`+Y` the thumb side, `+Z` out of the back, and it is a right-handed frame.
+
+For a hand held palm down, fingers away from the body, the left hand has its
+thumb on the right and the right hand on the left. Working the cross product
+through both:
+
+- left hand: `+X x +Y` is the back of the hand
+- right hand: `+X x +Y` is the palm
+
+So the construction is only correct for a left hand, and the studio's frame is
+therefore a **left hand's** frame. The user confirmed scanning with the left
+hand, which is the handedness the reference hand is built for, so no per-session
+handedness detection is needed and none was added. A right-handed wearer needs a
+negated `+Z`; if that ever has to be supported it is a stored flag, not a
+heuristic, and the studio is where it should be set.
+
+Synthetic left hand, expressed directly in the studio frame, run through the new
+construction: `+X` `(0.999, 0.050, 0.000)`, `+Y` `(-0.049, 0.987, 0.152)`,
+`+Z` `(0.008, -0.152, 0.988)`, worst axis error `0.0129`, the residual being the
+thumb's natural lean up the hand.
+
+### Also in that commit
+
+- `+X` now runs from the **middle of the knuckle line** `(5 + 17) / 2` to the
+  wrist crease, rather than trusting the middle knuckle alone. Same direction,
+  half the jitter, and placement depends on this axis more than any other.
+- The 2D and metric paths now run the identical construction, so they cannot
+  disagree with each other. Previously they used different "across" vectors
+  (index-minus-pinky versus index-minus-ring) and different sign rules.
+- `pose.far` reads `pose.normal.z` rather than the 2D vector's `z`, which was
+  stale whenever the metric path overwrote the normal.
+- `roll.sign`, the `side` object and `vUp` are gone. `roll.decided` stays, but
+  only to anchor the on-screen `roll.deg` readout. Nothing about placement reads
+  it.
+
+`roll.deg` keeps its old sign convention relative to the reference frame, so a
+reading is comparable with earlier ones.
+
 ## Matte, Chrome and Clear did nothing, and the model file decided that
 
 All three finish controls were dead, not subtle. In `applyToMaterialInstance`:
@@ -926,22 +1036,25 @@ Alwaysdata's published fingerprint if the account is ever rebuilt.
 | `fc564fa` | `ProductARScan-B4dMx8l7.js` | dial faces the camera. Facing fixed, band still crossways. |
 | `90d69f6` | `ProductARScan-DMpgw0W8.js` | forearm on local X, band along the arm, adds the tilt trim. |
 | `205016e` | `index-*` | seller-set alignment, shared wrist frame, capsule hand, flip controls. |
-| `e15aa93` | `index-C8LPQc_P.js` | **bundled rigged hand, no bangle, rotation sliders. Current, live.** |
+| `e15aa93` | `index-C8LPQc_P.js` | bundled rigged hand, no bangle, rotation sliders. |
+| `e15aa93`..`3326fc4` | see the deploy log | material finish, Clear opacity, forearm and hand occluders, then the anatomical wrist frame. |
+| `3326fc4` | `ProductARScan-BdKfeX_w.js` | **wrist frame from the thumb, no camera sign. Current, live.** |
 
-Verified green locally (build and lint both exit 0) against `e15aa93`, which is
-what the live site served. Removing the dead `.ar-spin-*` CSS in the commit that
-touched this section changes the asset hashes, so the next deploy will publish
-new filenames; nothing about that is a behaviour change.
+Verified green locally (lint and build both exit 0) against `3326fc4`.
 
 ## Deploy log
 
 | commit | assets | note |
 | --- | --- | --- |
 | `e15aa93` | `index-C8LPQc_P.js` / `index-BwFrOMB7.css` | was live until 27 Sep |
-| `ca31d1b` | `index-CvB__2NS.js` / `index-mcnVgCeH.css` | **current, live.** dead CSS removed, no behaviour change |
+| `ca31d1b` | `index-CvB__2NS.js` / `index-mcnVgCeH.css` | dead CSS removed, no behaviour change |
+| `71c063a` | `index-DrK9ZTUd.js` / `ProductViewer-BOadN-uJ.js` | Matte/Chrome/Clearcoat fixed, finish sliders 0-100 |
+| `27501af` | `index-DrK9ZTUd.js` / `ProductARScan-DLYJXtF2.js` | Clear opacity + forearm occluder. **Backend also uploaded by hand; needs the restart.** |
+| `d1e1288` | `ProductARScan-DLYJXtF2.js` | second, broad flat occluder for the hand |
+| `3326fc4` | `index-2GIQtWpS.js` / `ProductARScan-BdKfeX_w.js` / `ProductViewer-Dmv_-P1y.js` / `ProductAR-DVnOo4nZ.js` | **current, live.** wrist frame from the thumb |
 
-Verified live after the `ca31d1b` upload, since the notes flag a missing
-`reference-hand.glb` as a past failure mode: `index.html` serves the new
-hashes, and `/reference-hand.glb`, `ProductARScan-O4WeZbSO.js`,
-`ProductAR-C85-hmh4.js` and `/api/products/apple-watch-ultra` all return 200.
-Static files only, so no Alwaysdata restart was needed.
+Verified live after each upload, since the notes flag a missing
+`reference-hand.glb` as a past failure mode: `index.html` serves the new hashes
+and `/reference-hand.glb`, `ProductARScan-*.js`, `ProductAR-*.js` and
+`/api/products/apple-watch-ultra` all return 200. Static files only, so no
+Alwaysdata restart was needed for any row above.
