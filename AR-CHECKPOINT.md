@@ -2,28 +2,38 @@
 
 ## Resume here
 
-State as of `3860ac3`, pushed to `origin/dotnet-vite-app`. Live site
-https://mdnr.alwaysdata.net, serving `index-Cmrlhevq.js` /
-`ProductARScan-CC9nr5mu.js` / `ProductViewer-BjUTZdvq.js` /
-`ProductAR-V8a3_VqG.js`.
+State as of `bd0c1c5`, pushed to `origin/dotnet-vite-app`. Live site
+https://mdnr.alwaysdata.net, serving `index-DcGFttxE.js` /
+`ProductARScan-B4GYs2SA.js` / `ProductViewer-Bzm8dcEn.js` /
+`ProductAR-CR-1sGx5.js`. Deployed and verified: the served
+`ProductARScan-B4GYs2SA.js` is byte identical to the build, SHA-256
+`2B4A744CDD1DA1E29AA7801D8D8E17B55634CBB069BD2FB874779BA1C43354C0`.
 
 Everything below this block is background. The "Repo state right now" section
 further down predates the material work and is kept only as history.
 
 ### Ask the user to retest placement
 
-The watch landing on the palm was **not** a wrist frame problem, it was the
-seller's offset being rotated by the seller's own rotation. See "The offset was
-being rotated by the seller's own rotation" below. Frontend only, no restart.
+Two placement bugs are now fixed and both were unit or basis errors rather than
+a wrist frame problem. The frame has been correct since `3326fc4`; three
+sessions spent on it were chasing the wrong thing. See "The offset was being
+rotated by the seller's own rotation" and "The wrist width was a palm length"
+below. Frontend only, no restart.
 
 `apple-watch-ultra`, rear camera, **left hand**. Hard refresh first: every asset
 name is new, so a cached bundle is the likeliest way to see a result that is
 already fixed.
 
-If it is still off, report *which* of these, because they are not
-interchangeable and the previous three sessions each assumed a different one:
+The watch will also render about **1.75x smaller** than it did, which is correct
+and not a second bug: the old build was drawing a wrist width at palm length.
+If it lands in the right place but looks the wrong size, that is the seller's
+`scale` in the studio, not this constant.
 
-- position wrong, orientation right -> the offset/rotation split
+If it is still off, report *which* of these, because they are not
+interchangeable and the previous sessions each assumed a different one:
+
+- position wrong, orientation right -> the offset/rotation split, or the unit
+  the offset is multiplied by
 - position and orientation both wrong -> the wrist frame
 - right at first lock, drifts after -> the smoothing on `anchor`/`armDir`
 - changes with how the wrist is held at first lock -> a camera-relative sign
@@ -49,6 +59,25 @@ that string is missing, the restart has not happened.
 
 Rollback, should the restart surface a problem: the pre-upload DLL is at
 `%TEMP%\opencode\server-dll.bak` (193536 bytes). Put it back and restart again.
+
+### Deploying needs a password, the key is not registered
+
+`upload-alwaysdata.ps1` prefers `~/.ssh/id_ed25519_alwaysdata` whenever that file
+exists, and it is **not** registered with Alwaysdata. So the default invocation
+fails immediately under `BatchMode=yes` with "Permission denied
+(publickey,...)", and it prints the full list of `put` lines *before* it
+connects, which makes it look like the upload ran. It did not. Check the live
+`index.html` for the new hash before believing any of it.
+
+The working path is `-ForcePassword` with the password in
+`%TEMP%\opencode\ad-pass.txt`, which the script deletes afterwards. Ask the
+user for it in chat rather than assuming it is cached. The public key to
+register instead, which is the better fix, is in
+`%USERPROFILE%\.ssh\id_ed25519_alwaysdata.pub`:
+`ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ4lZ7HTevoicpZ7bJgkmjB9RTsma2psojjZV5RAaiON`
+
+The password has now been shared in chat more than once and should be rotated.
+
 
 ### What is already live and testable without any restart
 
@@ -1084,7 +1113,7 @@ Alwaysdata's published fingerprint if the account is ever rebuilt.
 | `205016e` | `index-*` | seller-set alignment, shared wrist frame, capsule hand, flip controls. |
 | `e15aa93` | `index-C8LPQc_P.js` | bundled rigged hand, no bangle, rotation sliders. |
 | `e15aa93`..`3326fc4` | see the deploy log | material finish, Clear opacity, forearm and hand occluders, then the anatomical wrist frame. |
-| `3326fc4` | `ProductARScan-BdKfeX_w.js` | **wrist frame from the thumb, no camera sign. Current, live.** |
+| `3326fc4` | `ProductARScan-BdKfeX_w.js` | wrist frame from the thumb, no camera sign. Superseded by the two rows below. |
 
 Verified green locally (lint and build both exit 0) against `3326fc4`.
 
