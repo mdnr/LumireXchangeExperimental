@@ -17,6 +17,40 @@ Live site: https://mdnr.alwaysdata.net
 - **Rotation direction confirmed correct on the rear camera.** It only looked
   inverted on the selfie preview, which is mirrored. Do not "fix" this.
 
+### Only one product has a saved alignment, so it is the only valid test subject
+
+Read off the live API, not assumed. `GET /api/products` then `GET
+/api/products/{slug}` per product, reading the public `modelAlignment` field:
+
+| product | has a model | saved alignment |
+| --- | --- | --- |
+| `apple-watch-ultra` | yes | **yes** |
+| `pulse-smartwatch` | yes | **no** |
+| `lumen-table-lamp` | yes | no |
+| `echo-speaker` | yes | no |
+| `aurora-headphones` | yes | no |
+
+This matters because **`pulse-smartwatch` has never been aligned**, and it is the
+model every axis measurement in this file was taken from. Putting *it* through
+the try-on renders the watch in its authored orientation with no alignment
+applied at all, which looks broken and has nothing to do with the camera path.
+`?ar-debug` says `NONE (seller has not aligned this)` in exactly that case. Test
+with `apple-watch-ultra`, and treat "unaligned product looks wrong" as the
+expected, already-understood behaviour rather than as a new fault.
+
+The stored `apple-watch-ultra` alignment, for reference:
+
+```
+quat    (0.000, 0.216, 0.976, 0.000)   length 0.9997, normalizes
+offset  (0.37, -0.10, 0.07)            wrist widths
+scale   1.00
+```
+
+That is very nearly a half turn about the `(0, 0.216, 0.976)` axis, i.e. mostly
+about `+Z`, which is the align page's "Flip 180" applied to a model authored dial
+down. It is a plausible value, which is worth stating because it means a wild
+result on the device is not explained by a corrupt stored alignment.
+
 ### The wrist frame, and why nothing infers orientation any more
 
 `+X` up the forearm, `+Y` around the wrist, `+Z` out of the back of the hand.
@@ -163,8 +197,14 @@ It should not. Direction is judged on the rear camera only.
 ## Resolved: the dial faced left instead of at the camera
 
 Fixed at `fc564fa` by remapping the basis to the measured axes. Both quarter-turn
-controls now default to zero, which is correct, so the watch orients itself with
-no manual adjustment. They remain as URL overrides only.
+controls sat at zero, which was correct, so the watch oriented itself with no
+manual adjustment.
+
+They no longer exist at all. The mapping they were compensating for is gone, so
+keeping them would have left two knobs that cannot fix anything and can only
+introduce a fault. They went at `5d19a0e` with the rest of the guessing. The
+button rows in the AR overlay went with them, which is why that overlay no longer
+has any rotation controls on it.
 
 The two failures that pointed at the cause, worth keeping:
 
@@ -175,17 +215,29 @@ The two failures that pointed at the cause, worth keeping:
 
 ## Still open
 
-- **Residual tilt.** The dial reads on local Z but leans back a little, and the
-  model was authored with the case tipped up off the band. This is a real
-  constant angle, not a mapping error, so quarter turns cannot express it and
-  snapping to 90 degree steps left the watch visibly crooked. A `?ar-tilt=` trim
-  in whole degrees now exists for it, defaulting to 0, with an on-screen row at
-  -10/-5/0/+5/+10/+15. **The correct value is not yet known.** It is the next
-  thing to trim on device.
-- **Position.** `armR` standoff pushes the watch out along the palm normal, and
-  that normal carries a leftward component (measured `palmN -0.38 -0.05 0.93`),
-  which puts the watch left of the wrist centre. Exaggerated when the wrist fills
-  the frame. `?ar-arm` (default `0.45`) trims it. Not yet adjusted.
+- **The camera path has not been run on a device since the reference hand
+  landed.** `ProductARScan` and `ProductAR` both still read the alignment through
+  the shared `toWristAlignment` and both still compose it as
+  `wristBasis * savedAlignment`, which is the same order the align page implies,
+  so the contract holds by inspection. Inspection is not a device test. This is
+  the one open item that needs hardware.
+- **Residual tilt is no longer a renderer concern.** The dial reads on local Z
+  but leans back a little, because the model was authored with the case tipped up
+  off the band. That is a real constant angle, and quarter turns cannot express
+  one. It is now the seller's to express, as a free angle on the align page,
+  which is the right place for it. There is no `?ar-tilt` and there should not be
+  one; a trim here would reintroduce exactly the per-model knowledge the frame
+  was built to delete.
+- **Position is no longer a renderer concern either.** The `armR` standoff that
+  used to push the watch out along a palm normal carrying a leftward component
+  is gone. The seller sets an offset in wrist widths, and both renderers rotate
+  that offset by the final orientation before applying it, because "just off the
+  skin" is a statement about the watch rather than about the world.
+
+Both of the above used to be listed here as trims still to be dialled in. They
+were closed by deleting them, not by finding a value, and that is the point worth
+keeping: a number that only one model needs belongs to that model's seller, and
+a per-renderer trim for it is a bug waiting to be rediscovered.
 
 ## Method, for the next axis problem
 
@@ -205,21 +257,74 @@ The two failures that pointed at the cause, worth keeping:
 - That `multiHandWorldLandmarks` is being delivered, now confirmed indirectly:
   the user read `roll -65deg 3D` rather than `PINNED`, so the metric hand is
   arriving on the test phone.
+- **That the camera path honours a seller's saved alignment.** See the procedure
+  below. This is the outstanding test.
+
+## The camera-path device test
+
+The point of the test is narrow and worth keeping narrow: **does the try-on render
+the watch the way the align page shows it?** It is not a test of tracking, which
+is already known good, nor of the dial axis, which is already measured and fixed.
+It is a test of one composition, `wristBasis * savedAlignment`, across two
+renderers that were written at different times and have never both been run.
+
+Run it on the same device, in one sitting, in this order. The order is the test:
+the align page is the expected result, so look at it first and do not go back to
+re-look afterwards, or the expectation drifts to match the result.
+
+1. Log in as the seller. Open
+   `https://mdnr.alwaysdata.net/seller/products/apple-watch-ultra/align`.
+   **Use this product.** It is the only one with a saved alignment, and using an
+   unaligned product tests nothing while looking like it found something.
+2. Orbit the view to roughly match a wrist seen from the back, hand held out.
+   Note where the dial points, which way the band runs, and roughly where the
+   case sits along the forearm. Do not drag the model and do not save. The page
+   is meant to load already showing the saved alignment.
+3. Hard refresh, then open
+   `https://mdnr.alwaysdata.net/products/apple-watch-ultra?ar-debug`.
+   Start the try-on and **switch to the rear camera** with the flip button.
+   Direction is only judged on the rear camera; the selfie preview is mirrored
+   and will look inverted when it is not.
+4. Read the readout before judging anything visual. `align` must say `saved`, and
+   `roll` must show a `3D` value rather than `PINNED`. If `align` says `NONE` the
+   alignment is not arriving and nothing about the rendering means anything yet.
+5. Hold the wrist still, back of hand to the lens. Compare against step 2: dial
+   out of the back of the hand, band around the wrist running down the forearm,
+   watch sitting on the forearm side the align page put it.
+6. Roll the wrist slowly through about 90 degrees. The watch must travel *with*
+   the hand. If it rotates the opposite way, or flips end over end, that is the
+   `roll.sign` locking in `ProductARScan.tsx` and is a real fault.
+7. Turn the hand palm-to-back. The watch should swing around and show its own
+   back, rather than staying stuck to the camera.
+8. Only then try native WebXR AR if the device offers it, since `ProductAR` is the
+   less-tested of the two and has a known unverified constant,
+   `CANONICAL_TO_WRIST_SPACE` in `ProductAR.tsx`.
+
+Record the outcome as one of: matches the align page; a fixed offset from it; or
+mirror-reversed. Those need different fixes and the distinction is the whole
+value of the test, so it is worth saying which one was seen rather than just
+"wrong".
 
 ## Debug parameters
 
 | param | meaning |
 | --- | --- |
-| `?ar-debug` | landmark overlay plus a readout of standoff, wrist, facing, forearm and roll |
+| `?ar-debug` | landmark overlay plus a readout of wrist size, roll, palm normal, arm direction, and whether an alignment was found |
 | `?ar-axes` | draws the model's own X, Y and Z axes on the watch. **This is how the dial axis was measured.** Use it rather than tuning a mapping |
-| `?ar-spin=0\|90\|180\|270` | quarter turn about the dial normal. Defaults to 0, which is correct |
-| `?ar-facing=0\|90\|180\|270` | quarter turn about the remaining axis. Defaults to 0, which is correct |
-| `?ar-tilt=-30..30` | free-angle trim for the case leaning back off the band. Defaults to 0. **The right value is still unknown** |
-| `?ar-arm=0.45` | standoff from the wrist, as a fraction of wrist width |
 
-`ar-spin`, `ar-facing` and `ar-tilt` all have on-screen button rows in the AR
-overlay, which is far easier than editing a URL on a phone. The two quarter
-turns sit at zero and should stay there; they are trims, not the fix.
+**That is the whole list.** `?ar-spin`, `?ar-facing`, `?ar-tilt` and `?ar-arm` are
+all documented in older revisions of this file and **no longer exist**. They were
+removed at `5d19a0e` when the seller-set alignment replaced the renderer's
+guessing, along with the on-screen button rows that drove them. Nothing reads
+those query parameters any more, so passing one is silently ignored and the
+overlay will look as though it did nothing. Do not go looking for a tilt value
+to trim: tilt is a real authored angle and the seller's free-angle input on the
+align page expresses it, which is the correct place for it.
+
+The `?ar-debug` readout's `align` line is the one to read first on a device. It
+says `NONE (seller has not aligned this)` when the product has no saved
+alignment, which is a completely different fault from a bad one and is worth
+distinguishing before investigating anything else.
 
 ## Deploy
 
@@ -310,8 +415,7 @@ Alwaysdata's published fingerprint if the account is ever rebuilt.
 | `205016e` | `index-*` | seller-set alignment, shared wrist frame, capsule hand, flip controls. |
 | `e15aa93` | `index-C8LPQc_P.js` | **bundled rigged hand, no bangle, rotation sliders. Current, live.** |
 
-## Credentials
-
-The SFTP password for `mdnr@ssh-mdnr.alwaysdata.net` appears in this repo's shell
-history and in transcripts. It is not stored in any file in the repo, which is
-the right state. **Rotate it**, and prefer a key over a password.
+Verified green locally (build and lint both exit 0) against `e15aa93`, which is
+what the live site serves. Removing the dead `.ar-spin-*` CSS in the commit that
+touched this section changes the asset hashes, so the next deploy will publish
+new filenames; nothing about that is a behaviour change.
