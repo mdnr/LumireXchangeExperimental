@@ -426,6 +426,9 @@ export function ProductARScan({ modelUrl, material, modelMaterials, alignment, r
     const across = new THREE.Vector3(1, 0, 0);
     const poseBasis = new THREE.Matrix4();
     const watchQuat = new THREE.Quaternion();
+    // The wrist frame on its own, kept apart from `watchQuat`. The frame is what
+    // turns a canonical offset into a scene position; the seller's rotation is not.
+    const basisQuat = new THREE.Quaternion();
     let cameraReady = false;
     let engineReady = false;
     let tracking = false;
@@ -903,15 +906,35 @@ export function ProductARScan({ modelUrl, material, modelMaterials, alignment, r
             // is the whole point: the alignment is expressed in the canonical
             // frame, so the frame is applied outside it and the model's own axes
             // never enter the calculation.
-            watchQuat.setFromRotationMatrix(poseBasis).multiply(alignRef.current.quat);
+            basisQuat.setFromRotationMatrix(poseBasis);
+            watchQuat.copy(basisQuat).multiply(alignRef.current.quat);
             watchGroup.quaternion.slerp(watchQuat, 0.35);
 
             // The seller's offset, in wrist widths, so one alignment fits any hand.
-            // Rotated by the final orientation, because "just off the skin" is a
-            // statement about the watch, not about the world.
+            //
+            // Rotated by the wrist basis ONLY, never by `watchQuat`. The offset is
+            // already in the canonical frame, so the basis is the only thing left
+            // to get it into the scene. Folding the seller's own rotation in as
+            // well applied their model rotation to their model *position*, which
+            // is not a thing: it spun the watch off the wrist without changing
+            // how it looked, because a rotation about the watch's own centre
+            // leaves the dial facing the same way.
+            //
+            // It stayed hidden as long as the seller's rotation was small, and
+            // then bit on a product whose quaternion is a half turn about
+            // (0, 0.284, 0.959). A half turn about that axis maps canonical +X to
+            // -1.000 on X, so a +0.53 offset toward the elbow was applied as
+            // -0.53, straight back down onto the palm. The Z component survived
+            // (dot +0.839), which is why the watch still faced correctly and only
+            // the position was wrong: the single most confusing possible symptom,
+            // and one no amount of fiddling with the wrist frame would ever have
+            // fixed, because the frame was never the thing that was broken.
             watchGroup.position
               .copy(anchor)
-              .addScaledVector(alignRef.current.offset.clone().applyQuaternion(watchQuat), pose.wristPx);
+              .addScaledVector(
+                alignRef.current.offset.clone().applyQuaternion(basisQuat),
+                pose.wristPx,
+              );
 
             const pxPerModelWidth = ((WATCH_WIDTH_FACTOR * pose.wristPx) / model.maxDim) * alignRef.current.scale;
             watchGroup.scale.setScalar(pxPerModelWidth);
