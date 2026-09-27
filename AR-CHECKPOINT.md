@@ -334,6 +334,77 @@ hand-built renderer gets none of the defaults a `<Canvas>` sets for free. Any
 renderer built by hand in this codebase has to set `toneMapping` and
 `outputColorSpace` explicitly or it will quietly disagree with the two that don't.
 
+### The actual cause: the per-part pass was matching against an empty object
+
+The tone-mapping and environment work above was real, but it was treating a
+symptom. The colour was wrong because **the per-part pass had never once
+applied a single preset**, in any renderer, since it was written.
+
+`applyMaterialPresets(materialMap, presets)` matched presets against
+`Object.values(materialMap)`, and every caller got `materialMap` from the parsed
+GLTF as `gltf.materials`:
+
+```ts
+const g = gltf as typeof gltf & { materials?: Record<string, THREE.Material> };
+return { scene: g.scene, materials: (g.materials ?? {}) as Record<string, THREE.Material> };
+```
+
+**`GLTFLoader` does not put a `materials` dictionary on its result.** Its
+`onLoad` builds exactly this and nothing more:
+
+```js
+const result = { scene, scenes, animations, cameras, asset, parser, userData };
+```
+
+There is no `materials` key. The `?? {}` quietly turned "this field does not
+exist" into "there are no materials", so `slots` was empty, every lookup
+returned `undefined`, and all 33 presets were discarded **without an error, a
+warning, or a single line of output**. `applyMaterialToScene` had already run
+first and painted all 33 materials with the base colour, so the watch rendered in
+the base colour and looked exactly like a product whose variants were ignored.
+
+On `apple-watch-ultra` that base colour is `#ff0000` while the swatch is black
+`#000000`, so the AR view showed a **red** watch on a black swatch. The user
+reporting "the AR ignores the colour I picked" was reporting this precisely; it
+took a round trip asking what colour was actually on screen to separate it from
+the two rendering differences above, which were real but secondary.
+
+`useGLTF` returns the same parsed object, so `ProductViewer` and `ModelAlignPage`
+were affected identically. In the viewer the failure was even quieter, because
+`Object.values(undefined)` threw a `TypeError` — but it threw on line 2 of the
+effect, *after* the base paint on line 1 had already landed, so the paint stayed
+half-applied and the error went to a console nobody was watching.
+
+Three things were wrong at once, and only the third was the actual fault:
+
+1. an optional convenience field on a third-party loader's result was treated as
+   a guaranteed part of the contract
+2. the failure was silent, so it looked like correct behaviour
+3. it failed *after* the first half of a two-step paint, so what remained visible
+   was plausible rather than obviously broken
+
+The fix reads the materials off the scene graph instead, which is authoritative
+because it holds the exact instances being rendered:
+
+```ts
+applyMaterialPresets({ ...materialMap, ...materialsFromScene(scene) }, modelMaterials);
+```
+
+Dict first, so its ordering still drives the index fallback; scene second, to pick
+up anything the dict missed. Also:
+
+- `applyMaterialPresets` now takes `materialMap ?? {}`, so a missing map can never
+  throw in the middle of a paint again
+- a preset that matches nothing is collected and logged in dev, because a part
+  that quietly failed to recolour is indistinguishable from one that succeeded
+- `ProductViewer` was moved off its hand-rolled two-call version onto
+  `applyProductMaterials`, so all four call sites now share one path
+
+Verified in the built chunk rather than assumed: the minified output contains the
+`isMesh` traversal that builds the name-keyed map. Not yet confirmed by eye on a
+device, and the notes say so.
+
+
 ## The camera-path device test
 
 The point of the test is narrow and worth keeping narrow: **does the try-on render

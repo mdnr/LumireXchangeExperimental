@@ -3,7 +3,7 @@ import { Canvas } from '@react-three/fiber';
 import { ContactShadows, Environment, Html, Lightformer, OrbitControls, RoundedBox, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import type { Material, ModelMaterial } from '../lib/types';
-import { applyMaterialToScene, applyMaterialPresets } from '../lib/modelMaterials';
+import { applyProductMaterials } from '../lib/modelMaterials';
 
 interface ProductViewerProps {
   modelUrl?: string | null;
@@ -92,8 +92,7 @@ function LoadedModel({ url, material, modelMaterials, revision }: { url: string;
   }, [scene]);
 
   useEffect(() => {
-    applyMaterialToScene(scene, material);
-    applyMaterialPresets(materials, modelMaterials);
+    applyProductMaterials(scene, materials, material, modelMaterials);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scene, material?.surfaceType, material?.color, material?.finish, material?.metalness, material?.roughness, material?.clearcoat, JSON.stringify(modelMaterials)]);
 
