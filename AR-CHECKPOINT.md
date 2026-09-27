@@ -1,5 +1,87 @@
 # AR Wrist Watch - Checkpoint Notes
 
+## Resume here
+
+State as of `27501af`, pushed to `origin/dotnet-vite-app`. Live site
+https://mdnr.alwaysdata.net, serving `index-wcQLA_qM.js` /
+`ProductARScan-Cy_vvqbE.js` / `ProductViewer-9zIgUhFL.js`.
+
+Everything below this block is background. The "Repo state right now" section
+further down predates the material work and is kept only as history.
+
+### There is exactly one thing left to do, and it is not a code change
+
+**Restart the site in the Alwaysdata admin panel.** Then the migration runs at
+startup, adds `Material_Transparency`, and the Clear slider starts working.
+
+Until that restart the backend on disk is current but the *running process* is
+not, so `GET /api/products/pulse-smartwatch` still answers without a
+`transparency` key and the API silently drops the field on save. The Clear slider
+is therefore inert, not broken. Confirm with:
+
+```
+curl -s https://mdnr.alwaysdata.net/api/products/pulse-smartwatch | findstr transparency
+```
+
+`JsonSerializerDefaults.Web` omits nulls but **not** zeros, so a working
+deployment shows `"transparency":0` even for a product nobody has touched. If
+that string is missing, the restart has not happened.
+
+Rollback, should the restart surface a problem: the pre-upload DLL is at
+`%TEMP%\opencode\server-dll.bak` (193536 bytes). Put it back and restart again.
+
+### What is already live and testable without any restart
+
+The forearm occluder is frontend only, so the "I can see the back strap inside
+the watch" fix is on the site right now. Test `apple-watch-ultra` in camera AR
+before restarting anything, since that is the only product with a saved alignment.
+
+If the strap is still visible, `OCCLUDER_R` in `ProductARScan.tsx` is too small.
+If the case loses a rim or a bite out of the dial, it is too big. It is `0.47` and
+the reasoning for that exact value is in the occlusion section below. One number,
+one redeploy, no server involvement.
+
+### Deploy mechanics that were wrong here and cost real time
+
+`upload-alwaysdata.ps1` uploads **only `publish/wwwroot`**. It is a static-files
+uploader. It has never shipped a line of backend code, and the backend on the
+server was still the Sep 26 build until this session. A frontend-only deploy
+looking perfectly healthy is not evidence that a server change shipped.
+
+When the backend does need to ship:
+
+- The app directory is `/home/mdnr/www/`, and the DLLs sit **directly** in it.
+  Only `Server.dll`, `Server.pdb` and
+  `Server.staticwebassets.endpoints.json` change for a code-only change; compare
+  local and remote sizes before uploading anything.
+- Upload as `put` to a dotted temp name then `rename` over the target. `put`
+  truncates in place, and a failure there leaves a corrupt DLL that only breaks
+  on the *next* restart. The rename is atomic and leaves the running process on
+  its old inode.
+- Never upload `appsettings*.json` and never upload `app.db`. There is no `app.db`
+  in the publish output, so the production database is safe from a publish
+  upload, but the config is worth leaving alone deliberately.
+- The restart itself can only be done from the admin panel. There is no API for
+  it, so every backend deploy ends with asking the user.
+
+### Still unverified, and unfixable from here
+
+- Whether `0.47` is the right radius. Only the user's phone can say.
+- Native WebXR `CANONICAL_TO_WRIST_SPACE` in `ProductAR.tsx`. No supported
+  hardware here. The camera path and the native path have diverged for a long
+  time and only the camera path has been tested.
+- Alwaysdata SSH key registration, and rotating the account password, which has
+  been exposed in this conversation and in shell history. Both are admin-panel
+  jobs.
+
+### Dead code, do not go looking for it in the browser
+
+`MaterialEditor.tsx` is the component that looks like the base-material editor and
+nothing imports it. The live material controls are the per-part sliders inside
+`ProductFormPage`. It has been kept consistent with the rest rather than deleted.
+
+---
+
 Checkpoint tag: `ar-metric3d-checkpoint` (at commit `2e6c2c2`)
 Orientation-fixed tag: `ar-facing-fixed` (at commit `fc564fa`)
 Live site: https://mdnr.alwaysdata.net
