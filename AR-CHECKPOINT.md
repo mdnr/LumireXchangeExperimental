@@ -2,12 +2,36 @@
 
 ## Resume here
 
-State as of `bd0c1c5`, pushed to `origin/dotnet-vite-app`. Live site
+State as of `e415df9`, pushed to `origin/dotnet-vite-app`. Live site
 https://mdnr.alwaysdata.net, serving `index-DcGFttxE.js` /
 `ProductARScan-B4GYs2SA.js` / `ProductViewer-Bzm8dcEn.js` /
 `ProductAR-CR-1sGx5.js`. Deployed and verified: the served
 `ProductARScan-B4GYs2SA.js` is byte identical to the build, SHA-256
 `2B4A744CDD1DA1E29AA7801D8D8E17B55634CBB069BD2FB874779BA1C43354C0`.
+
+The last commit is a verification script only, so the deployed build is the one
+produced by `bd0c1c5` and the asset names are unchanged by it.
+
+### Open items, in the order they are worth doing
+
+1. **Ask the user to retest placement.** The wrist-unit fix is live and proved
+   against the studio, but nobody has looked at it on a phone. `apple-watch-ultra`,
+   rear camera, **left hand**, hard refresh. This is the only thing gating the
+   next decision, and every one of the last four sessions was decided on a
+   device observation rather than a derivation.
+2. **Restart Alwaysdata for Clear.** Admin panel only, not SSH. Then confirm
+   `curl -s https://mdnr.alwaysdata.net/api/products/pulse-smartwatch | findstr transparency`
+   returns `"transparency":0`.
+3. **Register the SSH key** so deploys stop needing a password, and rotate the
+   password, which has now been shared in chat more than once.
+4. **Occluder check on device.** The proxies were authored in wrist widths and
+   the unit they are multiplied by is now correct, so they should be sound, but
+   that has never been seen on a wrist.
+5. **DeepAR-style hand mesh.** Still not started. The current occluders are
+   analytic proxies, not a landmark-driven mesh, so this is the real gap between
+   what exists and what the user described wanting.
+6. **Native WebXR** `CANONICAL_TO_WRIST_SPACE` remains unverified on hardware
+   and is unaffected by all of the above.
 
 Everything below this block is background. The "Repo state right now" section
 further down predates the material work and is kept only as history.
