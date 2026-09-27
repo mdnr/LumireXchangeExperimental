@@ -308,6 +308,32 @@ infers a property from it. Both looked reasonable, both were confidently wrong,
 and both were only caught by measuring the actual file rather than by looking at
 the screen and deciding it looked plausible.
 
+### And then the colour was still wrong, with the data provably right
+
+With the heuristic gone the camera view finally took the buyer's colour, but it
+still did not *look* like the 3D viewer, and the two remaining suspects were both
+checkable without a phone:
+
+- **Tone mapping.** `ProductViewer` and `ProductAR` are both `<Canvas>` from
+  react-three-fiber, whose `Canvas` sets `toneMapping = ACESFilmicToneMapping`
+  unless `flat` is passed, and neither passes it. `ProductARScan` builds its
+  renderer by hand, where three.js r185 defaults to `NoToneMapping`. Same
+  material, different grade, so the identical `#c9a227` read as a flat and more
+  saturated gold in the camera view than in the viewer.
+- **No environment.** The viewer hangs an `<Environment>` off three Lightformers,
+  so every surface there has something to reflect. The camera scene had nothing
+  to reflect, and the presets are `metalness 0.3`, `clearcoat 0.15`, both of
+  which take their appearance largely from the environment, so the case read
+  flatter and darker there than in the viewer. Fixed with a generated
+  `RoomEnvironment` through `PMREMGenerator`, which costs no asset and no request.
+
+The lesson is the one worth keeping: **fixing the material pipeline did not make
+the two views agree, because "the material" is only half of what the user sees.**
+Tone mapping, exposure, environment and the light rig are the other half, and a
+hand-built renderer gets none of the defaults a `<Canvas>` sets for free. Any
+renderer built by hand in this codebase has to set `toneMapping` and
+`outputColorSpace` explicitly or it will quietly disagree with the two that don't.
+
 ## The camera-path device test
 
 The point of the test is narrow and worth keeping narrow: **does the try-on render

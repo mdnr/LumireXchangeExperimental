@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { applyProductMaterials } from '../lib/modelMaterials';
 import type { Material, ModelAlignment, ModelMaterial } from '../lib/types';
 import { toWristAlignment, WATCH_WIDTH_FACTOR, type WristAlignment } from '../lib/wristAlignment';
@@ -165,6 +166,17 @@ export function ProductARScan({ modelUrl, material, modelMaterials, alignment, r
     renderer.setClearColor(0x000000, 0);
     gl.appendChild(renderer.domElement);
 
+    // Match the colour pipeline the other two renderers already use.
+    //
+    // The 3D viewer and the native WebXR view are both <Canvas> from react-three-
+    // fiber, and its Canvas sets toneMapping to ACESFilmic (unless `flat` is set,
+    // which neither of them does). This renderer is built by hand, and a bare
+    // THREE.WebGLRenderer defaults to NoToneMapping, so this view was grading the
+    // same #c9a227 as a flat, more saturated gold than the viewer showed. Same
+    // material, different film stock.
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+
     const scene = new THREE.Scene();
     scene.add(new THREE.AmbientLight(0xffffff, 0.75));
     const keyLight = new THREE.DirectionalLight(0xffffff, 1.1);
@@ -173,6 +185,18 @@ export function ProductARScan({ modelUrl, material, modelMaterials, alignment, r
     const rimLight = new THREE.DirectionalLight(0xffffff, 0.5);
     rimLight.position.set(-6, 0, -4);
     scene.add(rimLight);
+
+    // The 3D viewer hangs an <Environment> off three Lightformers, so every
+    // surface there has something to reflect. This scene had nothing, and a
+    // surface with nothing to reflect is not the colour it was authored as: the
+    // preset carries clearcoat 0.15 and metalness 0.3, both of which take their
+    // appearance from the environment, and with none the case read flatter and
+    // darker than the same material does in the viewer. A generated room is
+    // enough to fix that and costs no asset and no network request.
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    const envTarget = pmrem.fromScene(new RoomEnvironment(), 0.04);
+    scene.environment = envTarget.texture;
+    pmrem.dispose();
     const watchGroup = new THREE.Group();
     const wristAnchor = new THREE.Object3D();
     scene.add(wristAnchor);
@@ -800,6 +824,7 @@ export function ProductARScan({ modelUrl, material, modelMaterials, alignment, r
       window.removeEventListener('resize', refreshSize);
       stopStream();
       void s.hands?.close();
+      envTarget.dispose();
       renderer.dispose();
       renderer.forceContextLoss();
       if (gl.contains(renderer.domElement)) gl.removeChild(renderer.domElement);
