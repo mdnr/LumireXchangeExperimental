@@ -72,6 +72,20 @@ export const REFERENCE_HAND_ROTATION_X = Math.PI / 2;
 export const WRIST_CENTRE_MODEL = new THREE.Vector3(0.4549, 0.0235, -0.0557);
 export const WRIST_BREADTH_MODEL = 0.9061;
 
+/** Breadth across the MCP knuckle line, from the same style of sweep. */
+export const PALM_BREADTH_MODEL = 1.362;
+
+/**
+ * How many wrist breadths wide the palm is, 0.906 / 1.362 = 0.665.
+ *
+ * The align page's unit is the wrist, so a camera that wants to reproduce a saved
+ * alignment has to convert its own pixel measurement into wrist breadths before
+ * it multiplies anything by it. A tracker can measure the palm breadth directly,
+ * across the knuckle line, and this is the factor that turns that into a wrist.
+ */
+export const WRIST_BREADTH_OVER_PALM_BREADTH =
+  WRIST_BREADTH_MODEL / PALM_BREADTH_MODEL;
+
 /**
  * The align page measures everything in wrist widths, the wrist being exactly
  * 1.0 across, so the model is scaled until its wrist is 1.0 wide too. That is

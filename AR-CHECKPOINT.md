@@ -1098,7 +1098,8 @@ Verified green locally (lint and build both exit 0) against `3326fc4`.
 | `27501af` | `index-DrK9ZTUd.js` / `ProductARScan-DLYJXtF2.js` | Clear opacity + forearm occluder. **Backend also uploaded by hand; needs the restart.** |
 | `d1e1288` | `ProductARScan-DLYJXtF2.js` | second, broad flat occluder for the hand |
 | `3326fc4` | `index-2GIQtWpS.js` / `ProductARScan-BdKfeX_w.js` / `ProductViewer-Dmv_-P1y.js` / `ProductAR-DVnOo4nZ.js` | wrist frame from the thumb, no camera sign |
-| `3860ac3` | `index-Cmrlhevq.js` / `ProductARScan-CC9nr5mu.js` / `ProductViewer-BjUTZdvq.js` / `ProductAR-V8a3_VqG.js` | **current, live.** offset rotated by the wrist basis only |
+| `3860ac3` | `index-Cmrlhevq.js` / `ProductARScan-CC9nr5mu.js` / `ProductViewer-BjUTZdvq.js` / `ProductAR-V8a3_VqG.js` | offset rotated by the wrist basis only |
+| wrist width fix | `index-DcGFttxE.js` / `ProductARScan-B4GYs2SA.js` / `ProductViewer-Bzm8dcEn.js` / `ProductAR-CR-1sGx5.js` | **current, live.** wrist width measured as palm breadth x 0.665, not palm length |
 
 Verified live after each upload, since the notes flag a missing
 `reference-hand.glb` as a past failure mode: `index.html` serves the new hashes,
@@ -1136,3 +1137,48 @@ now rests on a measurement.
 
 So canonical `+X` is toward the elbow, confirmed, and the studio is correct. When
 the runtime disagreed with the studio, the studio was the one to believe.
+
+### The wrist width was a palm length (`ProductARScan-B4GYs2SA.js`)
+
+With the offset rotating correctly, the direction became right and the amount
+became wrong: the watch landed well up the forearm instead of on the wrist. The
+seller's `offsetX` of `0.53` had been authored in the studio, where the unit is
+explicitly the **wrist**, since `REFERENCE_HAND_SCALE = 1 / WRIST_BREADTH_MODEL`
+scales the model until its wrist is exactly 1.0 across.
+
+The runtime multiplied that by `dist(p0, p5)`, which is the distance from the
+wrist crease to the index knuckle. That is palm **length**, roughly three
+quarters wider than a palm breadth on an adult hand, so every wrist width the
+seller asked for came out about 1.75x too big. A `+0.53` offset that should have
+moved the watch about 30mm up the arm moved it about 55mm.
+
+`dist(p5, p17)` is the span the studio's unit actually wants, across the MCP
+knuckle line, and `lib/referenceHand.ts` already documented the conversion:
+`0.906 / 1.362 = 0.665`, which the existing note corroborates against the
+anatomical figure of 0.64 to 0.70 for an adult hand. So:
+
+```ts
+const trackingPx = dist(p0, p5);   // gate only: is this hand worth tracking?
+const wristPx = dist(p5, p17) * WRIST_BREADTH_OVER_PALM_BREADTH;
+```
+
+Two spans on purpose. The tracking gate is left on the original measure so the
+distance at which tracking is dropped does not move as a side effect of fixing
+the unit.
+
+This also retro-justifies the occluder constants, which were already written in
+wrist widths: `HAND_BREADTH = 1.36` against the newly named
+`PALM_BREADTH_MODEL = 1.362`. Those numbers only mean anything if the thing they
+are multiplied by is a wrist, so the occluders and the watch scale together and
+their proportions to each other are unchanged. No occluder retuning is needed.
+
+Expect the watch to render **smaller** as well as closer, by the same factor.
+That is not a regression: at 1.75x the seller's `scale` of `0.85` was rendering
+the watch about a wrist and three quarters wide. If the size is wrong once it
+lands in the right place, the fix is `scale` in the studio, not this constant.
+
+Verified in the built bundle rather than trusted: the minifier left the division
+unfolded as `gl = hl/1.362` off `hl = .9061`, exported as `r`, imported into
+`ProductARScan` as `se` and applied as `dist(p5, p17) * se`, with the gate still
+`c < le` where `le = 28`. Note for next time: searching the bundle for the
+decimal `0.6652` finds nothing, because it is computed, not written.

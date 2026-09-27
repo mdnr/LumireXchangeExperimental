@@ -5,6 +5,7 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import { applyProductMaterials } from '../lib/modelMaterials';
 import type { Material, ModelAlignment, ModelMaterial } from '../lib/types';
 import { toWristAlignment, WATCH_WIDTH_FACTOR, type WristAlignment } from '../lib/wristAlignment';
+import { WRIST_BREADTH_OVER_PALM_BREADTH } from '../lib/referenceHand';
 
 interface ProductARScanProps {
   modelUrl: string;
@@ -570,9 +571,20 @@ export function ProductARScan({ modelUrl, material, modelMaterials, alignment, r
             const p0 = toScreen(lmOut[0]);
             const p5 = toScreen(lmOut[5]);
             const p9 = toScreen(lmOut[9]);
-            const wristPx = dist(p0, p5);
+            const p17 = toScreen(lmOut[17]);
+            // Two different spans, deliberately not the same one. The gate below
+            // only asks "is this hand big enough to be worth tracking", so it keeps
+            // the original wrist-to-knuckle measure. The wrist width that the
+            // seller's alignment is multiplied by has to be the wrist's actual
+            // width, which is the knuckle line across the palm times 0.665, the
+            // same wrist-over-palm ratio the studio's own reference hand is
+            // scaled by. Measuring the palm length here instead inflated every
+            // wrist width by roughly three quarters, which is what threw a +0.53
+            // offset up the forearm rather than onto the wrist.
+            const trackingPx = dist(p0, p5);
+            const wristPx = dist(p5, p17) * WRIST_BREADTH_OVER_PALM_BREADTH;
             diag.wristPx = wristPx;
-            if (wristPx < MIN_WRIST_PX) {
+            if (trackingPx < MIN_WRIST_PX) {
               lost();
               return;
             }
