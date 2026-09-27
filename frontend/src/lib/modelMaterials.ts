@@ -30,6 +30,32 @@ function applyToMaterialInstance(m: THREE.Material, material?: Material): void {
       material.finish === 'chrome' ? Math.max(material.clearcoat, 0.6) : material.clearcoat;
     if (material.finish === 'chrome') physical.clearcoatRoughness = 0.05;
   }
+  // See-through, 0 opaque to 1 invisible. This is opacity, not the clear-coat
+  // lobe above, and the two are deliberately separate: the stored clearcoat
+  // values in the database are clear-coat values, so pointing this slider at
+  // that field would have turned existing parts invisible.
+  //
+  // `?? 0` rather than a plain read, because products saved before the column
+  // existed have no value here at all, and undefined must mean opaque.
+  //
+  // 0 means "leave the model as authored" and deliberately does not write
+  // opacity at all. Forcing opacity 1 on every material would quietly undo any
+  // transparency in the source file, and watches are full of it: a sapphire
+  // crystal, a smoked dial, a display back. Only a part the seller has actually
+  // made see-through gets touched.
+  const seeThrough = material.transparency ?? 0;
+  if (seeThrough > 0) {
+    // `transparent` is what puts three.js in the blended queue, and flipping it
+    // changes the compiled program, hence the needsUpdate below.
+    mat.transparent = true;
+    mat.opacity = 1 - seeThrough;
+    // A blended surface must not write depth, or the first part drawn punches a
+    // hole through everything behind it and the effect turns inside out.
+    mat.depthWrite = false;
+    // Fully clear is fully invisible, so skip the draw rather than pay for a
+    // fragment that blends to nothing.
+    mat.visible = seeThrough < 1;
+  }
   mat.needsUpdate = true;
 }
 

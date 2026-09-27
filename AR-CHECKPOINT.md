@@ -565,6 +565,92 @@ because Chrome overrides both. Leaving them live would show a number that is not
 what renders, which is the same class of bug as a control that lies: this whole
 session has been about controls that report something other than what they do.
 
+## Clear is opacity, and it is not the same field as clearcoat
+
+The Clear slider now runs 0 = opaque to 100 = fully transparent, which is opacity
+and has nothing to do with the clear-coat lobe. It was tempting to just repoint it
+at the existing `clearcoat` column, which is already there, already clamped, and
+needs no migration. That would have been a mistake, and the reason is worth
+recording: **every `clearcoat` value in the database is a clear-coat value.** It
+was written by the seeder (`0.6` on the chrome presets, `0.1` on matte) and by the
+old studio slider, both of which meant "how glossy". Reinterpreting the column as
+opacity would have made those parts 60% see-through, and the one Apple part stored
+at `clearcoat: 1` would have gone completely invisible. The field name is the only
+record of that intent, so it keeps its meaning.
+
+Hence a new `Transparency` column on `Material_Transparency`, default `0`, and the
+clear-coat lobe is left to the Chrome preset in code where it belongs. The
+per-part materials live in `ModelMaterialsJson`, a JSON column, so they pick the
+new field up with no migration of their own and every part that predates it
+deserialises to `0` = opaque. Verified by applying the migration to a copy of the
+live database, not just to a fresh one.
+
+Two things the renderer deliberately does **not** do:
+
+- **0 does not write opacity at all.** Forcing `opacity = 1` on every material
+  would quietly undo any transparency in the source file, and watches are full of
+  it: sapphire crystal, smoked dial, display back. Only a part the seller has
+  actually made see-through gets touched, so 0 means "leave the model as
+  authored".
+- **It does not read `transparency` unguarded.** Parts saved before the column
+  have no value at all, and `undefined` must mean opaque rather than `NaN`.
+
+`depthWrite` is forced off for a blended surface, or the first part drawn punches
+a hole through everything behind it and the effect turns inside out. At 100 the
+material is set `visible = false` rather than paying for a fragment that blends to
+nothing.
+
+`ProductViewer` keys its repaint on a `materialKey`, and `transparency` had to be
+added to it or the slider would repaint nothing until something unrelated changed.
+
+## The far side of the band was visible because nothing wrote depth in front of it
+
+Wearing a watch, the far half of the band is behind your wrist. The camera path
+had no wrist, so it drew the band straight through: the back strap showed up
+*inside* the watch. Native WebXR never had this problem, because it binds to the
+runtime's `wrist` space and gets a real hand to hide it with.
+
+The fix is the same one the native path already uses. `ProductAR.tsx` has had
+
+```tsx
+<DefaultXRHand model={{ colorWrite: false }} />
+```
+
+all along, and that is the whole technique: draw the hand, write depth, paint
+nothing. The camera path now builds the equivalent — a forearm capsule with
+`colorWrite: false`, `depthWrite` left on, `renderOrder = -1` so depth is laid down
+before even a see-through watch sorts against it, and `frustumCulled = false`
+because it is rescaled every frame and its bounds mean nothing to that test.
+
+**The radius is the entire argument, and it is not a matter of taste.** Camera on
+`+z`, wrist axis through the origin, band looping round at radius `0.5` wrist
+widths, case standing on the skin from `0.5` outward. For a proxy of radius `r`:
+
+| part | sits at | hidden only if | so to keep it |
+| --- | --- | --- | --- |
+| near band | `z = +0.5` | `r > 0.5` | `r < 0.5` |
+| case | `z >= 0.5` | `r > 0.5` | `r < 0.5` |
+| far band | `z = -0.5` | `r < 0.5` | hidden |
+
+All three agree: any `r` just under the skin radius hides exactly the far band and
+nothing else. `0.47` is that value. The earlier attempt was oversized, which is
+why it took a visible bite out of the case and the whole idea got written off as
+unusable — it was never the idea that was wrong, only the radius.
+
+It is sized from `pose.wristPx` and not from the seller's `scale`, because it
+stands in for the wearer's arm, which the watch alignment has no business
+resizing, and driven from the same frame and the same `anchor` as the watch in the
+same block, so it can never lag by a frame and make the cut crawl along the
+silhouette. It is hidden outright when tracking drops, since a left-behind occluder
+would go on cutting the watch out of a frame where the hand is already gone.
+
+`MaterialEditor.tsx` is dead code, by the way. It looks like the material editor,
+it is the component that would hold the base-material controls, and nothing
+imports it — the live UI is the per-part editor inside `ProductFormPage`. It has
+been kept consistent with the rest rather than deleted, but do not go looking for
+a base-material slider in the browser and conclude the build is broken.
+
+
 
 
 ## The camera-path device test

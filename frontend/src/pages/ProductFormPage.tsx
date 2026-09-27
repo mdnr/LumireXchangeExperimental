@@ -796,15 +796,20 @@ export function ProductFormPage() {
                       </label>
                       <label className="field part-slider">
                         <span>
-                          Clear <span className="muted small">{Math.round(m.material.clearcoat * 100)}</span>
+                          Clear{' '}
+                          <span className="muted small">
+                            {(m.material.transparency ?? 0) === 0
+                              ? 'opaque'
+                              : Math.round((m.material.transparency ?? 0) * 100)}
+                          </span>
                         </span>
                         <input
                           type="range"
                           min={0}
                           max={100}
                           step={1}
-                          value={Math.round(m.material.clearcoat * 100)}
-                          onChange={(e) => setModelMaterial(m.index, { clearcoat: Number(e.target.value) / 100 })}
+                          value={Math.round((m.material.transparency ?? 0) * 100)}
+                          onChange={(e) => setModelMaterial(m.index, { transparency: Number(e.target.value) / 100 })}
                         />
                       </label>
                     </div>

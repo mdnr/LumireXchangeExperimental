@@ -669,7 +669,8 @@ static MaterialSettings MapMaterial(MaterialDto m)
         Finish = finish,
         Metalness = Math.Clamp(m.Metalness, 0, 1),
         Roughness = Math.Clamp(m.Roughness, 0, 1),
-        Clearcoat = Math.Clamp(m.Clearcoat, 0, 1)
+        Clearcoat = Math.Clamp(m.Clearcoat, 0, 1),
+        Transparency = Math.Clamp(m.Transparency, 0, 1)
     };
 }
 

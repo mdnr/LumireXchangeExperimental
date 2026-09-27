@@ -217,6 +217,43 @@ export function ProductARScan({ modelUrl, material, modelMaterials, alignment, r
     scene.add(wristAnchor);
     wristAnchor.add(watchGroup);
 
+    // Forearm occluder: invisible, but it writes depth, so the far half of the
+    // band is rejected behind it and the watch reads as going around the wrist
+    // rather than floating in front of it. Same trick as the native path's
+    // <DefaultXRHand model={{ colorWrite: false }} />, which is why native AR has
+    // always looked right here and the camera path did not.
+    //
+    // The radius is the whole argument. Camera on +z, wrist axis through the
+    // origin, band looping round at radius 0.5 wrist widths, case standing on the
+    // skin from 0.5 outward. A proxy of radius r then:
+    //   near band (z = +0.5)  hidden only if r > 0.5   -> stay visible if r < 0.5
+    //   far band  (z = -0.5)  hidden whenever r < 0.5
+    //   case      (z >= 0.5)  hidden only if r > 0.5   -> stay visible if r < 0.5
+    // So any r just under the skin radius hides exactly the far band and nothing
+    // else. That is why this is 0.47 and not "as big as the wrist looks": the
+    // earlier attempt was oversized, took a bite out of the case, and got the
+    // whole idea written off as unusable.
+    const OCCLUDER_R = 0.47;
+    // Extents along the arm, in wrist widths, from the wrist landmark. The band
+    // reaches past the wrist bone toward the elbow, so the elbow side is longer.
+    const OCCLUDER_BACK = 0.9;
+    const OCCLUDER_FWD = 0.4;
+    const ARM_UP = new THREE.Vector3(0, 1, 0);
+    const wristOccluder = new THREE.Mesh(
+      // Unit capsule, scaled per frame. The caps deform into ellipsoids under a
+      // non-uniform scale, which is invisible here and cheaper than rebuilding
+      // geometry every frame.
+      new THREE.CapsuleGeometry(1, 1, 6, 20),
+      // colorWrite false with depthWrite left on: drawn, but paints nothing.
+      new THREE.MeshBasicMaterial({ colorWrite: false }),
+    );
+    // Depth first, so even a see-through watch sorts against the arm.
+    wristOccluder.renderOrder = -1;
+    wristOccluder.visible = false;
+    // Rescaled every frame, so its bounds mean nothing to the frustum test.
+    wristOccluder.frustumCulled = false;
+    scene.add(wristOccluder);
+
     // Axis probe. The watch is parented here and the model is recentred on its
     // own bounding box, so the group origin is the model centre and an arrow
     // drawn along a local axis shows exactly where that axis points on screen.
@@ -833,6 +870,23 @@ export function ProductARScan({ modelUrl, material, modelMaterials, alignment, r
 
             const pxPerModelWidth = ((WATCH_WIDTH_FACTOR * pose.wristPx) / model.maxDim) * alignRef.current.scale;
             watchGroup.scale.setScalar(pxPerModelWidth);
+
+            // Occluder last, from the same frame and the same wrist width, so it
+            // can never lag the watch by a frame and make the cut crawl along the
+            // silhouette. Sized off pose.wristPx rather than the seller's scale:
+            // it stands in for the wearer's arm, which the watch alignment has no
+            // business resizing.
+            const occR = OCCLUDER_R * pose.wristPx;
+            wristOccluder.position
+              .copy(anchor)
+              .addScaledVector(armDir, ((OCCLUDER_BACK - OCCLUDER_FWD) / 2) * pose.wristPx);
+            wristOccluder.quaternion.setFromUnitVectors(ARM_UP, armDir);
+            wristOccluder.scale.set(
+              occR,
+              Math.max(1e-6, (OCCLUDER_BACK + OCCLUDER_FWD) * pose.wristPx - 2 * occR),
+              occR,
+            );
+            wristOccluder.visible = true;
             const depth = Math.max(1e-6, model.maxDim * pxPerModelWidth) + 4;
             if (Math.abs(cam.far - depth) > 1e-3) {
               cam.near = -depth;
@@ -844,8 +898,11 @@ export function ProductARScan({ modelUrl, material, modelMaterials, alignment, r
               ringRef.current.style.top = `${pose.y + gl.clientHeight / 2}px`;
               ringRef.current.style.opacity = '1';
             }
-          } else if (ringRef.current) {
-            ringRef.current.style.opacity = '0';
+          } else {
+            // A left-behind occluder would keep cutting the watch out of a frame
+            // where the hand is already gone.
+            wristOccluder.visible = false;
+            if (ringRef.current) ringRef.current.style.opacity = '0';
           }
         }
         try {

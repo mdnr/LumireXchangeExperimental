@@ -94,7 +94,7 @@ function LoadedModel({ url, material, modelMaterials, revision }: { url: string;
   useEffect(() => {
     applyProductMaterials(scene, materials, material, modelMaterials);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scene, material?.surfaceType, material?.color, material?.finish, material?.metalness, material?.roughness, material?.clearcoat, JSON.stringify(modelMaterials)]);
+  }, [scene, material?.surfaceType, material?.color, material?.finish, material?.metalness, material?.roughness, material?.clearcoat, material?.transparency, JSON.stringify(modelMaterials)]);
 
   return <primitive object={scene} />;
 }
@@ -119,6 +119,16 @@ function applyMaterialToMaterial(material?: Material): THREE.MeshStandardMateria
   const mat = new THREE.MeshStandardMaterial({ color: material?.color ?? '#e8e8e8' });
   mat.metalness = material?.metalness ?? 0.2;
   mat.roughness = material?.roughness ?? 0.55;
+  // The stand-in for products with no model file. It carries no finish or
+  // clearcoat at all, so it is already a simplification, but see-through is cheap
+  // here and the Clear slider should not look dead on a product that has one.
+  const seeThrough = material?.transparency ?? 0;
+  if (seeThrough > 0) {
+    mat.transparent = true;
+    mat.opacity = 1 - seeThrough;
+    mat.depthWrite = false;
+    mat.visible = seeThrough < 1;
+  }
   return mat;
 }
 
@@ -159,6 +169,9 @@ function PlaceholderGeometry({ shape, material }: { shape: ShapeKind; material?:
     material?.metalness,
     material?.roughness,
     material?.clearcoat,
+    // Without this the see-through slider repaints nothing until something else
+    // happens to change: the key is what decides the effect re-runs at all.
+    material?.transparency,
   ]);
 
   useEffect(() => {

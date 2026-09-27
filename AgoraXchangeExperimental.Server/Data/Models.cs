@@ -65,6 +65,12 @@ public class MaterialSettings
     public double Metalness { get; set; } = 0.2;
     public double Roughness { get; set; } = 0.55;
     public double Clearcoat { get; set; } = 0;
+    // How see-through the part is: 0 opaque, 1 invisible. Distinct from
+    // Clearcoat, which is a shiny second specular lobe and stays code-driven
+    // (the Chrome preset), because the two were briefly sharing one slider and
+    // every stored Clearcoat in the database is a clear-coat value, not an
+    // opacity one. Reinterpreting those would have made existing parts vanish.
+    public double Transparency { get; set; } = 0;
 }
 
 public class ColorVariant

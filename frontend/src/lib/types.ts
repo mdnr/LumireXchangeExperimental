@@ -6,6 +6,8 @@ export interface Material {
   metalness: number;
   roughness: number;
   clearcoat: number;
+  /** 0 opaque, 1 invisible. Drives opacity, not the clear-coat lobe. */
+  transparency: number;
 }
 
 export interface Spec {
@@ -152,6 +154,7 @@ export const DEFAULT_MATERIAL: Material = {
   metalness: 0.2,
   roughness: 0.55,
   clearcoat: 0,
+  transparency: 0,
 };
 
 export function emptyProduct({ material, modelUrl }: { material?: Material; modelUrl?: string | null } = {}): ProductInput {

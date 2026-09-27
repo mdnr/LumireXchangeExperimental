@@ -61,6 +61,7 @@ public class MaterialDto
     public double Metalness { get; set; } = 0.2;
     public double Roughness { get; set; } = 0.55;
     public double Clearcoat { get; set; } = 0;
+    public double Transparency { get; set; } = 0;
 
     public static MaterialDto From(MaterialSettings m) => new()
     {
@@ -70,7 +71,8 @@ public class MaterialDto
         Finish = m.Finish,
         Metalness = m.Metalness,
         Roughness = m.Roughness,
-        Clearcoat = m.Clearcoat
+        Clearcoat = m.Clearcoat,
+        Transparency = m.Transparency
     };
 }
 
@@ -129,7 +131,8 @@ public class ColorVariantDto
         Finish = m.Finish,
         Metalness = Math.Clamp(m.Metalness, 0, 1),
         Roughness = Math.Clamp(m.Roughness, 0, 1),
-        Clearcoat = Math.Clamp(m.Clearcoat, 0, 1)
+        Clearcoat = Math.Clamp(m.Clearcoat, 0, 1),
+        Transparency = Math.Clamp(m.Transparency, 0, 1)
     };
 
     private static ModelMaterial ToModelMaterial(ModelMaterialDto m) => new()
