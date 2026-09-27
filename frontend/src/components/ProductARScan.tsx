@@ -399,29 +399,26 @@ export function ProductARScan({ modelUrl, material, modelMaterials, alignment, r
       // the watch from the pinned camera facing pose to real wrist rotation.
       metric3d: false,
     };
-    // The palm frame rebuilt from the metric hand each detection. +y runs along
-    // the forearm, +x is the outward palm normal the dial faces, and +z spans
-    // the knuckles. Keeping it as a real orthonormal frame, rather than a pair
-    // of screen angles, is what gives the roll a direction and a full range
-    // instead of the symmetric sin(theta) the 2D landmarks can only produce.
+    // The palm frame rebuilt from the metric hand each detection. +X runs along
+    // the forearm toward the elbow, +Y is the thumb side and +Z is the outward
+    // palm normal the dial faces. Keeping it as a real orthonormal frame, rather
+    // than a pair of screen angles, is what gives the roll a direction and a full
+    // range instead of the symmetric sin(theta) the 2D landmarks can only produce.
     const wArm = new THREE.Vector3();
     const wAcross = new THREE.Vector3();
     const wNormal = new THREE.Vector3();
-    // Locked once, on the first metric frame, so the watch keeps the side of
-    // the wrist that was facing the lens when tracking engaged. Re-deriving the
-    // sign every frame would flip the watch end over end as the roll passed
-    // through zero.
-    const roll = { decided: false, sign: 1, ref: new THREE.Vector3(0, 0, 1), refCross: new THREE.Vector3(1, 0, 0), deg: 0 };
+    // The angle of the palm normal around the forearm, measured from wherever the
+    // wrist sat when tracking engaged, for the on-screen readout only. Nothing
+    // about placement depends on it.
+    const roll = { decided: false, ref: new THREE.Vector3(0, 0, 1), refCross: new THREE.Vector3(1, 0, 0), deg: 0 };
     // The wrist frame is rebuilt from the 3D landmarks every frame: +x runs
     // along the forearm, +z is the outward face of the watch. Handing the model
     // a full basis instead of two screen-space angles is what lets a
     // palm-to-back flip swing the watch right around the arm.
-    const vUp = new THREE.Vector3();
     const vRad = new THREE.Vector3();
     const vOut = new THREE.Vector3();
     const vX = new THREE.Vector3();
     const vZ = new THREE.Vector3();
-    const side = { sign: 1, decided: true, palm: 0 };
     const anchor = new THREE.Vector3();
     const armDir = new THREE.Vector3(0, 1, 0);
     const wristNormal = new THREE.Vector3(0, 0, 1);
@@ -604,49 +601,52 @@ export function ProductARScan({ modelUrl, material, modelMaterials, alignment, r
             // normalised against image width like x is, so it takes the same
             // aspect correction to land in a shared unit.
             //
-            // Wrist minus middle knuckle, so this points up the forearm. It used
-            // to be the other way round, knuckle minus wrist, which points at the
-            // fingertips: the exact opposite of the frame's +X. Landmarks 9 and 0
-            // are the middle finger's base knuckle and the wrist crease, so the
-            // subtraction is the whole of the difference.
+            // Wrist minus the middle of the knuckle line, so this points up the
+            // forearm. It used to be the other way round, knuckle minus wrist,
+            // which points at the fingertips: the exact opposite of the frame's
+            // +X. So a seller's +X offset was being applied toward the fingers
+            // here, putting a watch the studio placed 0.37 wrist widths up the
+            // forearm onto the back of the hand toward the knuckles at runtime.
             //
-            // The inversion is invisible in isolation and expensive in practice.
-            // `lib/referenceHand.ts` records, from measurements of the bundled hand
-            // rather than by eye, that the studio's +X runs from the fingertips
-            // toward the elbow: the arm end sits at x +1.166 and the middle
-            // fingertip at x -1.211. So a seller's +X offset was being applied
-            // toward the fingers here, putting a watch the studio placed 0.37
-            // wrist widths up the forearm onto the back of the hand towards the
-            // knuckles at runtime, with nothing for the seller to see and fix.
+            // Averaging the index and little knuckles rather than trusting the
+            // middle one halves the jitter, and this is the axis placement depends
+            // on most. `lib/referenceHand.ts` records, from measurements of the
+            // bundled hand rather than by eye, that the studio's +X runs from the
+            // fingertips toward the elbow: the arm end sits at x +1.166 and the
+            // middle fingertip at x -1.211.
+            vX.set(
+                lx(0) - (lx(5) + lx(17)) * 0.5,
+                -(ly(0) - (ly(5) + ly(17)) * 0.5),
+                -(lz(0) - (lz(5) + lz(17)) * 0.5) * aspect,
+            );
+            vX.normalize();
+            // +Y, the thumb side, read off the thumb's own landmarks, which is the
+            // one axis of the palm that is named rather than inferred. The thumb
+            // leans up the hand as well as across it, so the part of it that runs
+            // along the forearm is taken out first.
+            vRad.set(lx(4) - lx(1), -(ly(4) - ly(1)), -(lz(4) - lz(1)) * aspect);
+            vRad.addScaledVector(vX, -vRad.dot(vX));
+            if (vRad.lengthSq() < 1e-8) {
+                lost();
+                return;
+            }
+            vRad.normalize();
+            // +Z, out of the back of the hand, as +X cross +Y. `referenceHand.ts`
+            // records the studio's frame measured off the bundled hand: +X toward
+            // the elbow, +Y the thumb side, +Z out of the back of the hand. That
+            // hand is a left hand, and for a left hand this cross product lands on
+            // the back of the hand rather than the palm, so the runtime frame
+            // agrees with the studio by construction.
             //
-            // Flipping this also repairs +Y, which is worth more than it looks:
-            // `across` is derived from this axis, and because the frame is right
-            // handed a correct X and Z force a correct Y. Only X was wrong, so
-            // only X had to be touched.
-            vUp.set(lx(0) - lx(9), -(ly(0) - ly(9)), -(lz(0) - lz(9)) * aspect);
-            vRad.set(lx(5) - lx(17), -(ly(5) - ly(17)), -(lz(5) - lz(17)) * aspect);
-            vOut.crossVectors(vUp, vRad);
-            if (vOut.lengthSq() < 1e-8) {
-              lost();
-              return;
-            }
-            vOut.normalize();
-            side.palm = vOut.z;
-
-            // Decide once which side of the wrist the watch sits on, assuming
-            // it is the side facing the lens when tracking first locks. Deciding
-            // once and then following the frame continuously avoids re-deriving
-            // the sign every frame, which would make the watch spin.
-            if (!side.decided) {
-              side.decided = true;
-              side.sign = vOut.z > 0 ? 1 : -1;
-            }
-
-            vX.copy(vUp).normalize();
-            vZ.copy(vOut).multiplyScalar(side.sign).projectOnPlane(vX);
+            // The sign used to be read off the camera instead, which meant the
+            // frame depended on which way the wrist happened to be held at the
+            // moment tracking engaged. Same wrist, different entry pose, different
+            // placement, and nothing for a seller to see or correct.
+            vOut.crossVectors(vX, vRad);
+            vZ.copy(vOut);
             if (vZ.lengthSq() < 1e-8) {
-              lost();
-              return;
+                lost();
+                return;
             }
             vZ.normalize();
             pose.dir.copy(vX);
@@ -668,50 +668,47 @@ export function ProductARScan({ modelUrl, material, modelMaterials, alignment, r
               const wx = (i: number) => wl[i].x;
               const wy = (i: number) => -wl[i].y;
               const wz = (i: number) => -wl[i].z;
-              // Wrist minus middle knuckle, so +X runs up the forearm toward the
-              // elbow and matches the frame the seller aligned against. This was
-              // knuckle minus wrist, which points at the fingertips, so the whole
-              // frame sat in a half turn about Z: the seller's +X offset pushed
-              // the watch toward the fingers instead of toward the elbow, and
-              // their rotation was applied a half turn out. One subtraction, and
-              // the runtime frame agrees with `lib/referenceHand.ts`, which is
-              // measured from the bundled hand rather than assumed.
-              wArm.set(wx(0) - wx(9), wy(0) - wy(9), wz(0) - wz(9));
-              // Index knuckle to ring knuckle, across the palm.
-              wAcross.set(wx(13) - wx(5), wy(13) - wy(5), wz(13) - wz(5));
-              if (wArm.lengthSq() > 1e-8 && wAcross.lengthSq() > 1e-8) {
+              // The same construction as the 2D path, on the metric landmarks, so
+              // the two agree: +X toward the elbow, +Y the thumb side, +Z out of
+              // the back of the hand. wAcross is the thumb axis first and the
+              // orthonormal +Y after.
+              wArm.set(
+                wx(0) - (wx(5) + wx(17)) * 0.5,
+                wy(0) - (wy(5) + wy(17)) * 0.5,
+                wz(0) - (wz(5) + wz(17)) * 0.5,
+              );
+              wAcross.set(wx(4) - wx(1), wy(4) - wy(1), wz(4) - wz(1));
+              if (wArm.lengthSq() > 1e-8) {
                 wArm.normalize();
-                wAcross.normalize();
-                wNormal.crossVectors(wArm, wAcross);
-                if (wNormal.lengthSq() > 1e-8) {
-                  wNormal.normalize();
-                  if (!roll.decided) {
-                    roll.decided = true;
-                    // Keep whichever side of the wrist faced the lens at the
-                    // moment tracking engaged, so the watch does not jump to
-                    // the other side of the arm.
-                    roll.sign = wNormal.dot(CAM_DIR) >= 0 ? 1 : -1;
-                    roll.ref.copy(wNormal);
-                    roll.refCross.crossVectors(wArm, wNormal).normalize();
-                  }
-                  wNormal.multiplyScalar(roll.sign);
-                  // Re-orthogonalise so the basis stays exactly orthonormal
-                  // after the sign flip and after any landmark noise.
-                  wAcross.crossVectors(wNormal, wArm);
-                  if (wAcross.lengthSq() > 1e-8) {
-                    wAcross.normalize();
-                    wNormal.crossVectors(wArm, wAcross).normalize();
-                    pose.dir.copy(wArm);
-                    pose.normal.copy(wNormal);
-                    pose.metric3d = true;
-                    roll.deg =
-                      (Math.atan2(wNormal.dot(roll.refCross), wNormal.dot(roll.ref)) * 180) / Math.PI;
+                wAcross.addScaledVector(wArm, -wAcross.dot(wArm));
+                if (wAcross.lengthSq() > 1e-8) {
+                  wAcross.normalize();
+                  wNormal.crossVectors(wArm, wAcross);
+                  if (wNormal.lengthSq() > 1e-8) {
+                    wNormal.normalize();
+                    if (!roll.decided) {
+                      roll.decided = true;
+                      roll.ref.copy(wNormal);
+                      roll.refCross.crossVectors(wArm, wNormal).normalize();
+                    }
+                    // Re-orthogonalise against landmark noise, holding +X fixed so
+                    // the seller's offset cannot drift off the forearm axis.
+                    wAcross.crossVectors(wNormal, wArm);
+                    if (wAcross.lengthSq() > 1e-8) {
+                      wAcross.normalize();
+                      wNormal.crossVectors(wArm, wAcross).normalize();
+                      pose.dir.copy(wArm);
+                      pose.normal.copy(wNormal);
+                      pose.metric3d = true;
+                      roll.deg =
+                        (Math.atan2(wNormal.dot(roll.refCross), wNormal.dot(roll.ref)) * 180) / Math.PI;
+                    }
                   }
                 }
               }
             }
             pose.axis.set(pose.x, -pose.y, -0.5);
-            pose.far = vZ.z < 0;
+            pose.far = pose.normal.z < 0;
             pose.visible = true;
             holdUntil = performance.now() + HOLD_MS;
             setStatus('worn');
